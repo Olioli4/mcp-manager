@@ -192,7 +192,7 @@ sticky first column; stack below ~640 px.
 | L2 | **`apply --write` rewrites the file even when it prints "already up to date"** — a `.bak` proves it ran. This compounds HIGH-1. | Reviewer |
 | L3 | **A malformed `services.json` makes the resident app exit instantly, code 1.** As a `-windowsgui` binary launched by double-click there is no console, so nothing appears at all — silent death from a typo in a file we tell you to hand-edit. | I ran it: process gone, exit 1 |
 | L4 | **`CloseAll()` is never called** and the tray's `time.Tick` never stops. Upstream stdio children (`npx …`) outlive a quit. | Reviewer, grep |
-| L5 | **No log rotation** — `manager.log` grows unbounded. | I checked |
+| L5 | **No log rotation** — `mcp-manager.log` grows unbounded. | I checked |
 | L6 | **Zero ARIA.** The toast announces nothing; status is colour-only and vanishes in forced-colours mode. | UI reviewer |
 | L7 | **The Inventory form is not a `<form>`**, so Enter does nothing. | UI reviewer |
 

@@ -1,0 +1,40 @@
+name: release
+
+# A tag is the whole interface: push one, and the archives, checksums and
+# release notes come out of .goreleaser.yaml. Nothing here is duplicated from
+# that file, so there is only one place to change the release policy.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # GoReleaser creates the release
+
+jobs:
+  goreleaser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser reads the changelog from the commit history, so it needs
+          # the whole thing rather than a shallow clone.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fails the job before anything is built, and prints the failure where
+      # you can read it.
+      - name: tests
+        run: go test ./...
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

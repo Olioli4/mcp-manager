@@ -16,15 +16,18 @@ inventory.json
 # Agent / editor configuration, not part of the product.
 .claude/
 
+# GoReleaser's output, rebuilt by `goreleaser release`.
+dist/
+
 # Built binaries — rebuilt with `go build`, never committed.
 *.exe
 *.exe~
 
 # Runtime state. Everything here is derived and regenerated:
 #   cache/       the tool lists, refilled on the first call to each server
-#   manager.log  the tray has no console, so it writes here
+#   mcp-manager.log  the tray has no console, so it writes here
 cache/
-manager.log
+mcp-manager.log
 
 # Timestamped backups the writer leaves NEXT TO the file it touched.
 # They usually land in your home directory, but catch any that land here.

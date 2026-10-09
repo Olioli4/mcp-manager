@@ -46,7 +46,7 @@ PLAN.md           this file
   - Fixed: process probe failed on names with spaces (`Docker Desktop` vs `Docker Desktop.exe`)
     — added `procName()` normalisation.
   - Removed Docker/MCPHub from the manifest (dropped from the project per user).
-  - `manager.exe list` reports the 4 services with correct live state.
+  - `mcp-manager.exe list` reports the 4 services with correct live state.
 - [x] **D2 — concierge end-to-end.** Verified on `vision`: `start` → probe green; `start` again on
   `chrome-cdp` → "already running" (no second window); `stop vision` → probe red, port free.
 - [x] **D3 — dry-run writer + diff.** Plugin `plugins/claude-code.json` renders the exact Claude Code
@@ -161,7 +161,7 @@ PLAN.md           this file
     (a file client can be configured while closed; an API client cannot)"*.
   - The matrix now shows four columns.
 - [x] **The repository, and the docs split.** `git init` on `main`. The `.gitignore` keeps out the
-  built binaries, `cache/` and `manager.log` — everything committed is either source or a *source
+  built binaries, `cache/` and `mcp-manager.log` — everything committed is either source or a *source
   of truth*, nothing derived.
   - **The documentation now has one job per file**, because one 250-line README doing four jobs is
     how documentation rots:
@@ -303,8 +303,8 @@ HTTP API, the MCP surface, and the traps. This file is the plan and the running 
 ## How to check
 
 ```
-manager.exe list          list services + live state + why
-manager.exe status <id>   detail + notes
-manager.exe start <id>    start a service, wait for its probe to go green
-manager.exe stop <id>     stop a service, wait for its probe to go red
+mcp-manager.exe list          list services + live state + why
+mcp-manager.exe status <id>   detail + notes
+mcp-manager.exe start <id>    start a service, wait for its probe to go green
+mcp-manager.exe stop <id>     stop a service, wait for its probe to go red
 ```

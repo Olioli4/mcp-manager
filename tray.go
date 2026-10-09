@@ -60,7 +60,7 @@ func trayReady(e *Engine) {
 
 	systray.AddSeparator()
 	refresh := systray.AddMenuItem("Refresh", "re-read the state of the services")
-	trayLog := systray.AddMenuItem("Open the log", "manager.log next to the executable")
+	trayLog := systray.AddMenuItem("Open the log", "mcp-manager.log next to the executable")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "stop the manager (does not touch the services)")
 
@@ -171,9 +171,9 @@ func truncate(s string, n int) string {
 
 func logPath() string {
 	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), "manager.log")
+		return filepath.Join(filepath.Dir(exe), "mcp-manager.log")
 	}
-	return "manager.log"
+	return "mcp-manager.log"
 }
 
 func logf(format string, args ...any) {

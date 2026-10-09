@@ -1,0 +1,108 @@
+# GoReleaser — one config, and `git tag v0.1.0 && goreleaser release` does the rest.
+#
+# Validate with:  goreleaser check
+# Dry run with:   goreleaser release --snapshot --clean
+#
+# TWO BINARIES, and the difference is not cosmetic:
+#   mcp-manager        console build, for the CLI and for scripting
+#   mcp-manager-tray   -H=windowsgui, i.e. NO console window — the resident one
+#
+# The archive carries the example configs and the plugins. That is not
+# decoration: on first run the manager copies services.example.json into place
+# so a fresh install starts instead of erroring about a file the user has never
+# heard of. Ship the binary without them and that path breaks.
+
+version: 2
+
+project_name: mcp-manager
+
+before:
+  hooks:
+    # A release that does not pass its tests is not a release.
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: cli
+    binary: mcp-manager
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+
+  - id: tray
+    binary: mcp-manager-tray
+    main: .
+    env: [CGO_ENABLED=0]
+    goos: [windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    # -H=windowsgui is what makes it a tray application rather than a console
+    # one. Without it, double-clicking the icon opens a black rectangle.
+    ldflags: [-s -w -H=windowsgui]
+
+archives:
+  - id: default
+    formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - API.md
+      - PLUGINS.md
+      - services.example.json
+      - inventory.example.json
+      - plugins/*.json
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^gofmt'
+
+release:
+  # Draft by default: a release is outward-facing and should be read before it
+  # is published. Change to false once the process is boring.
+  draft: true
+
+# ---------------------------------------------------------------------------
+# NOT CONFIGURED YET — each of these needs something only you have.
+# Uncomment and fill in when you want the package managers.
+# ---------------------------------------------------------------------------
+#
+# scoop — needs a bucket repository you own:
+#
+# scoop:
+#   bucket:
+#     owner: YOUR-GITHUB-USER
+#     name: scoop-bucket
+#   homepage: https://github.com/YOUR-GITHUB-USER/mcp-manager
+#   description: One inventory for your MCP servers; a plugin per client.
+#   license: MIT
+#
+# winget — this is the channel that matters on Windows. GoReleaser opens a PR
+# against microsoft/winget-pkgs, which a human reviews.
+#
+# winget:
+#   - publisher: YourName
+#     package_identifier: YourName.mcp-manager
+#     homepage: https://github.com/YOUR-GITHUB-USER/mcp-manager
+#     short_description: One inventory for your MCP servers; a plugin per client.
+#     license: MIT
+#     publisher_url: https://github.com/YOUR-GITHUB-USER
+#     publisher_support_url: https://github.com/YOUR-GITHUB-USER/mcp-manager/issues
+#     repository:
+#       owner: YOUR-GITHUB-USER
+#       name: mcp-manager
+#       branch: main
+#     # winget requires a tagged release before it will accept a manifest.
+#     skip_upload: auto

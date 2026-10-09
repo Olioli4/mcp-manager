@@ -16,16 +16,16 @@ import (
 	"strings"
 )
 
-const usage = `service manager — E:\Coding\MCP_HUB
+const usage = `mcp-manager — the machine's concierge
 
-  manager                 starts the resident application (icon + MCP server)
-  manager list            lists the services, with their state and their reason for being
-  manager status <id>     detailed state of a service
-  manager start <id>      starts a service and waits for it to respond
-  manager stop <id>       stops a service and waits for it to be gone
-  manager apply           shows what would be written for each client (touches nothing)
-  manager apply --write   actually writes, after a timestamped backup
-  manager reload          re-reads services.json live (resident mode)
+  mcp-manager                 starts the resident application (tray icon + web UI + MCP server)
+  mcp-manager list            the host programs, with their live state and their reason for being
+  mcp-manager status <id>     one program in detail, with its notes
+  mcp-manager start <id>      starts it and waits for its probe to answer
+  mcp-manager stop <id>       stops it and waits for it to be gone
+  mcp-manager apply           shows what would be written for each client (touches nothing)
+  mcp-manager apply --write   writes it, after a timestamped backup
+  mcp-manager reload          re-reads services.json live (resident mode)
 
   Extension happens in services.json, inventory.json and plugins/ — never here.
 `

@@ -30,10 +30,10 @@ Everything runs on the host, in the tray. Nothing listens on the network — onl
 ## Quick start
 
 ```
-go build -o manager.exe .
-go build -o manager-gui.exe -ldflags "-H=windowsgui" .
+go build -o mcp-manager.exe .
+go build -o mcp-manager-tray.exe -ldflags "-H=windowsgui" .
 
-manager-gui.exe            # tray icon; brings up the web UI on 127.0.0.1:8787
+mcp-manager-tray.exe            # tray icon; brings up the web UI on 127.0.0.1:8787
 ```
 
 Then right-click the tray icon → **Open the configuration…**
@@ -60,10 +60,10 @@ Edit them, or edit the inventory from the web UI. Neither is ever committed.
 Chrome DevTools Protocol — it is built for Windows and does not pretend otherwise.
 
 ```
-manager.exe list           # the host programs and their live state
-manager.exe start <id>     # start one, wait for its probe
-manager.exe apply          # DRY RUN — shows exactly what would be written, changes nothing
-manager.exe apply --write  # writes it, after a timestamped backup
+mcp-manager.exe list           # the host programs and their live state
+mcp-manager.exe start <id>     # start one, wait for its probe
+mcp-manager.exe apply          # DRY RUN — shows exactly what would be written, changes nothing
+mcp-manager.exe apply --write  # writes it, after a timestamped backup
 ```
 
 `apply` without `--write` is the one to reach for first: it prints the exact JSON block per client

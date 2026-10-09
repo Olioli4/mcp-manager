@@ -133,8 +133,8 @@ The same server, three ways — this is the whole reason plugins exist:
 2. **Determine four things:** the root key, the vocabulary for `type`, the shape of `command`,
    and whether `type` is written at all.
 3. **Write `plugins/<id>.json`.**
-4. **`manager.exe apply`** — read the printed block. It is the exact JSON that would be written.
-5. **`manager.exe apply --write`**, then confirm in the client itself.
+4. **`mcp-manager.exe apply`** — read the printed block. It is the exact JSON that would be written.
+5. **`mcp-manager.exe apply --write`**, then confirm in the client itself.
 
 ### Before you write anything, check for these three traps
 
