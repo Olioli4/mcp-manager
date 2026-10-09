@@ -461,7 +461,7 @@ func marshalDoc(v any) ([]byte, error) {
 // and the second silently overwrote the first — losing the state from before
 // the first one.
 func backupPath(path string) string {
-	return fmt.Sprintf("%s.bak-%s-%04x", path, time.Now().Format("20060102-150405.000"), rand.Intn(0x10000))
+	return fmt.Sprintf("%s.bak-%s-%08x", path, time.Now().Format("20060102-150405.000"), rand.Uint32())
 }
 
 // writeFileAtomic writes data to path without ever leaving a half-written file

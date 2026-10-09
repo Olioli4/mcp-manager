@@ -42,7 +42,8 @@ type backend struct {
 	// only shows up once in a thousand, in production.)
 	srv atomic.Pointer[mcp.Server]
 
-	mu      sync.Mutex
+	connMu  sync.Mutex // held during connect/start to prevent concurrent connections
+	mu      sync.Mutex // held only for fast state updates
 	session *mcp.ClientSession
 	tools   []*mcp.Tool // last known — the cache
 	handler *mcp.StreamableHTTPHandler
@@ -53,6 +54,7 @@ type backend struct {
 	// run `npx @playwright/mcp` and `node aas-mcp.js` permanently — exactly the
 	// "it runs even though I asked for nothing" that was refused.
 	idleTimer *time.Timer
+	inFlight  int
 }
 
 func newBackend(eng *Engine, name string, spec InventoryServer) *backend {
@@ -88,16 +90,23 @@ func (b *backend) rebuildServer() {
 // ensureUpstream makes sure the upstream is reachable — and this is THE point
 // the user wanted: if a service declared as a prerequisite is off, we start it
 // HERE, at the moment a request arrives.
-//
-// We NEVER start outside this path. Preheating is content to connect: launching
-// ComfyUI or Blender at manager startup would be exactly the automatic start the
-// user refused.
 func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.session != nil {
+		b.mu.Unlock()
 		return nil
 	}
+	b.mu.Unlock()
+
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+
+	b.mu.Lock()
+	if b.session != nil {
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
 
 	// 1. The declared prerequisite — only if a request demands it.
 	if mayStart && b.spec.NeedsService != "" {
@@ -106,7 +115,9 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 			if running, _ := b.eng.Probe(svc); !running {
 				logf("proxy %s: request received, service %q off — starting", b.name, b.spec.NeedsService)
 				if _, err := b.eng.Start(b.spec.NeedsService); err != nil {
+					b.mu.Lock()
 					b.lastErr = err.Error()
+					b.mu.Unlock()
 					return fmt.Errorf("prerequisite %q: %w", b.spec.NeedsService, err)
 				}
 			}
@@ -116,18 +127,36 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 	// 2. The connection to the upstream.
 	sess, err := b.connect(ctx)
 	if err != nil {
+		b.mu.Lock()
 		b.lastErr = err.Error()
+		b.mu.Unlock()
 		return err
 	}
+	
+	b.mu.Lock()
 	b.session = sess
+	b.mu.Unlock()
 
 	// 3. Refresh the tool cache.
 	if lt, err := sess.ListTools(ctx, nil); err == nil && len(lt.Tools) > 0 {
+		b.mu.Lock()
 		b.tools = lt.Tools
+		b.mu.Unlock()
+		
 		saveToolCache(b.name, lt.Tools)
 		b.rebuildServer()
 		logf("proxy %s: %d tool(s) cached", b.name, len(lt.Tools))
 	}
+
+	b.mu.Lock()
+	if b.inFlight == 0 {
+		if b.idleTimer != nil {
+			b.idleTimer.Stop()
+		}
+		b.idleTimer = time.AfterFunc(idleTimeout(), b.idleTimeoutFunc)
+	}
+	b.mu.Unlock()
+	
 	return nil
 }
 
@@ -152,6 +181,50 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 	}
 }
 
+// enter safely borrows the session, incrementing the in-flight counter and
+// stopping the idle timer. Returns nil if the session was closed.
+func (b *backend) enter() *mcp.ClientSession {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sess := b.session
+	if sess != nil {
+		b.inFlight++
+		if b.idleTimer != nil {
+			b.idleTimer.Stop()
+			b.idleTimer = nil
+		}
+	}
+	return sess
+}
+
+// leave releases the session, decrementing the in-flight counter and re-arming
+// the idle timer if no other calls are in flight.
+func (b *backend) leave() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.inFlight > 0 {
+		b.inFlight--
+	}
+	if b.inFlight == 0 && b.session != nil {
+		if b.idleTimer != nil {
+			b.idleTimer.Stop()
+		}
+		b.idleTimer = time.AfterFunc(idleTimeout(), b.idleTimeoutFunc)
+	}
+}
+
+func (b *backend) idleTimeoutFunc() {
+	b.mu.Lock()
+	s := b.session
+	b.session = nil
+	b.idleTimer = nil
+	b.mu.Unlock()
+	if s != nil {
+		_ = s.Close()
+		logf("proxy %s: idle — disconnected (the tools stay cached)", b.name)
+	}
+}
+
 // forward routes a call. This is where "the request arrives and the service is
 // off" gets resolved: we start, then we forward.
 func (b *backend) forward(ctx context.Context, tool string, args json.RawMessage) (*mcp.CallToolResult, error) {
@@ -165,9 +238,15 @@ func (b *backend) forward(ctx context.Context, tool string, args json.RawMessage
 		}, nil
 	}
 
-	b.mu.Lock()
-	sess := b.session
-	b.mu.Unlock()
+	sess := b.enter()
+	if sess == nil {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+				"server %q connection lost before call", b.name)}},
+		}, nil
+	}
+	defer b.leave()
 
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
@@ -180,29 +259,7 @@ func (b *backend) forward(ctx context.Context, tool string, args json.RawMessage
 				"call to %s on %q failed: %v — retry, the connection has been remade", tool, b.name, err)}},
 		}, nil
 	}
-	b.armIdle()
 	return res, nil
-}
-
-// armIdle postpones the disconnection. Called after each successful call: as long
-// as we are using the server, we keep it warm.
-func (b *backend) armIdle() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.idleTimer != nil {
-		b.idleTimer.Stop()
-	}
-	b.idleTimer = time.AfterFunc(idleTimeout(), func() {
-		b.mu.Lock()
-		s := b.session
-		b.session = nil
-		b.idleTimer = nil
-		b.mu.Unlock()
-		if s != nil {
-			_ = s.Close()
-			logf("proxy %s: idle — disconnected (the tools stay cached)", b.name)
-		}
-	})
 }
 
 // dropSession closes the current session (under lock).
@@ -309,6 +366,19 @@ func ReloadProxies(e *Engine) error {
 		b.dropSession()
 	}
 	setProxies(fresh)
+	
+	// Warm up newly added servers that have an empty cache.
+	for name, b := range fresh {
+		if old[name] == nil {
+			b.mu.Lock()
+			noTools := len(b.tools) == 0
+			b.mu.Unlock()
+			if noTools {
+				go b.warm()
+			}
+		}
+	}
+
 	logf("proxy: %d server(s) exposed", len(fresh))
 	return nil
 }
