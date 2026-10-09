@@ -1,0 +1,24 @@
+# Line endings, pinned.
+#
+# Without this, a Windows checkout converts text files to CRLF — and gofmt then
+# flags EVERY .go file, because Go source is LF. CI found exactly that on its
+# first run: build, vet and test passed, gofmt failed on all nine files, while
+# the same check was clean on the machine that wrote them.
+#
+# Pinning it here means the answer does not depend on anyone's core.autocrlf.
+
+*.go       text eol=lf
+go.mod     text eol=lf
+go.sum     text eol=lf
+*.md       text eol=lf
+*.json     text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+LICENSE        text eol=lf
+
+# Never touched: a converted binary is a broken binary.
+*.exe binary
+*.png binary
+*.ico binary
