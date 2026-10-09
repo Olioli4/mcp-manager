@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests exist because of a specific audit finding. Each one names the
@@ -161,14 +163,64 @@ func TestWriteIsAtomicAndTidy(t *testing.T) {
 
 // Two writes in the same second used to produce the SAME backup name, so the
 // second overwrote the first and the pre-first-apply state was lost.
+//
+// The names are no longer separated by luck: O_EXCL makes the filesystem
+// arbitrate. So this test asks the filesystem to refuse the collision in ONE
+// frozen millisecond, and checks that each attempt took a NEW name with its own
+// intact copy — for as many names as the scheme promises (the bound is tested by
+// TestBackupGivesUpInsteadOfOverwriting).
 func TestBackupNamesDoNotCollide(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.json")
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	seen := map[string]bool{}
-	for i := 0; i < 200; i++ {
-		p := backupPath("x.json")
-		if seen[p] {
-			t.Fatalf("backup name reused within the same second: %s", p)
+	for i := 0; i < backupAttempts; i++ {
+		name, err := createBackupAt(path, []byte(fmt.Sprintf("%d", i)), 0o644, at)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
 		}
-		seen[p] = true
+		if seen[name] {
+			t.Fatalf("backup name reused within the same second: %s", name)
+		}
+		seen[name] = true
+		got, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		if string(got) != fmt.Sprintf("%d", i) {
+			t.Fatalf("attempt %d: the backup holds %q, not what we handed it", i, got)
+		}
+	}
+}
+
+// The counter is BOUNDED. When every candidate name is taken, createBackup must
+// say so — never overwrite a backup that already exists, which is the whole
+// reason the backup exists.
+func TestBackupGivesUpInsteadOfOverwriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.json")
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	stamp := at.Format("20060102-150405.000")
+	// Occupy every name createBackup will propose in this millisecond.
+	for n := 0; n < backupAttempts; n++ {
+		name := path + ".bak-" + stamp
+		if n > 0 {
+			name = fmt.Sprintf("%s.bak-%s-%d", path, stamp, n)
+		}
+		if err := os.WriteFile(name, []byte("occupied"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := createBackupAt(path, []byte("mine"), 0o644, at); err == nil {
+		t.Fatal("createBackup reported success with every candidate name taken")
+	}
+	first := path + ".bak-" + stamp
+	got, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "occupied" {
+		t.Errorf("an existing backup was overwritten: %q", got)
 	}
 }
 

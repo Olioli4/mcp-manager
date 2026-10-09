@@ -90,11 +90,20 @@ func (b *backend) rebuildServer() {
 // ensureUpstream makes sure the upstream is reachable — and this is THE point
 // the user wanted: if a service declared as a prerequisite is off, we start it
 // HERE, at the moment a request arrives.
-func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
+//
+// On success it returns the session ALREADY BORROWED: the call is counted in
+// flight in the same critical section that publishes the session, and the caller
+// must answer with leave(). That borrowing is not a detail — it is the design.
+// A function that only said "ok" would let the caller fetch b.session a moment
+// later, and in that moment the idle timer closes it: dereferencing the result is
+// the H3 crash. Here there is no moment, so there is nothing to check.
+func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) (*mcp.ClientSession, error) {
 	b.mu.Lock()
 	if b.session != nil {
+		sess := b.session
+		b.borrowLocked()
 		b.mu.Unlock()
-		return nil
+		return sess, nil
 	}
 	b.mu.Unlock()
 
@@ -103,8 +112,10 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 
 	b.mu.Lock()
 	if b.session != nil {
+		sess := b.session
+		b.borrowLocked()
 		b.mu.Unlock()
-		return nil
+		return sess, nil
 	}
 	b.mu.Unlock()
 
@@ -118,7 +129,7 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 					b.mu.Lock()
 					b.lastErr = err.Error()
 					b.mu.Unlock()
-					return fmt.Errorf("prerequisite %q: %w", b.spec.NeedsService, err)
+					return nil, fmt.Errorf("prerequisite %q: %w", b.spec.NeedsService, err)
 				}
 			}
 		}
@@ -130,11 +141,14 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 		b.mu.Lock()
 		b.lastErr = err.Error()
 		b.mu.Unlock()
-		return err
+		return nil, err
 	}
 
+	// Publish it AND borrow it in one move: from this line on, the idle timer
+	// cannot close the session out from under the call that is about to use it.
 	b.mu.Lock()
 	b.session = sess
+	b.borrowLocked()
 	b.mu.Unlock()
 
 	// 3. Refresh the tool cache.
@@ -148,16 +162,7 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 		logf("proxy %s: %d tool(s) cached", b.name, len(lt.Tools))
 	}
 
-	b.mu.Lock()
-	if b.inFlight == 0 {
-		if b.idleTimer != nil {
-			b.idleTimer.Stop()
-		}
-		b.idleTimer = time.AfterFunc(idleTimeout(), b.idleTimeoutFunc)
-	}
-	b.mu.Unlock()
-
-	return nil
+	return sess, nil
 }
 
 func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
@@ -181,20 +186,16 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 	}
 }
 
-// enter safely borrows the session, incrementing the in-flight counter and
-// stopping the idle timer. Returns nil if the session was closed.
-func (b *backend) enter() *mcp.ClientSession {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	sess := b.session
-	if sess != nil {
-		b.inFlight++
-		if b.idleTimer != nil {
-			b.idleTimer.Stop()
-			b.idleTimer = nil
-		}
+// borrowLocked counts a call on the session and stops the idle timer. It must be
+// called with b.mu held, in the same critical section that publishes the session:
+// that is what makes "the timer closed it between the check and the call"
+// unrepresentable. The caller owes exactly one leave().
+func (b *backend) borrowLocked() {
+	b.inFlight++
+	if b.idleTimer != nil {
+		b.idleTimer.Stop()
+		b.idleTimer = nil
 	}
-	return sess
 }
 
 // leave releases the session, decrementing the in-flight counter and re-arming
@@ -228,22 +229,17 @@ func (b *backend) idleTimeoutFunc() {
 // forward routes a call. This is where "the request arrives and the service is
 // off" gets resolved: we start, then we forward.
 func (b *backend) forward(ctx context.Context, tool string, args json.RawMessage) (*mcp.CallToolResult, error) {
-	if err := b.ensureUpstream(ctx, true); err != nil {
+	// ensureUpstream hands back a session that is ALREADY BORROWED: this call is
+	// counted in flight from the moment the session exists, so there is no window
+	// where the idle timer closes it and the call dereferences a closed session.
+	sess, err := b.ensureUpstream(ctx, true)
+	if err != nil {
 		// We return a READABLE error, not a transport failure: the caller must
 		// understand what is missing.
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
 				"server %q unreachable: %v", b.name, err)}},
-		}, nil
-	}
-
-	sess := b.enter()
-	if sess == nil {
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
-				"server %q connection lost before call", b.name)}},
 		}, nil
 	}
 	defer b.leave()
@@ -294,9 +290,14 @@ func idleTimeout() time.Duration {
 func (b *backend) warm() {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	if err := b.ensureUpstream(ctx, false); err != nil {
+	_, err := b.ensureUpstream(ctx, false)
+	if err != nil {
 		logf("proxy %s: not reachable yet (normal if its service is off)", b.name)
+		return
 	}
+	// The preheating borrowed the session on ensureUpstream's terms; it is not a
+	// call in flight, so hand it back and let the idle timer do its work.
+	b.leave()
 }
 
 // ---------------------------------------------------------------------------

@@ -10,9 +10,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +20,10 @@ import (
 	"strings"
 	"time"
 )
+
+// backupAttempts bounds the search for a free backup name. Two applies in the
+// same MILLISECOND is already absurd; ten steps is headroom, not a hope.
+const backupAttempts = 10
 
 // ---------------------------------------------------------------------------
 // The inventory
@@ -454,14 +458,52 @@ func marshalDoc(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// backupPath names a backup next to the file it copies.
+// createBackup writes a copy of the file's previous content NEXT TO it, choosing
+// a name the FILESYSTEM arbitrates.
 //
-// Milliseconds AND four random hex digits: the previous version had
-// second resolution, so two applies in the same second produced the same name
-// and the second silently overwrote the first — losing the state from before
-// the first one.
-func backupPath(path string) string {
-	return fmt.Sprintf("%s.bak-%s-%08x", path, time.Now().Format("20060102-150405.000"), rand.Uint32())
+// Milliseconds already separate two applies in the same second; what makes this
+// provably collision-free is O_EXCL: if a name is taken, the open FAILS and we
+// take the next counter. The previous version trusted a 32-bit random number to
+// keep the names apart — practically fine, but a lottery, and a lottery in a
+// backup path means silently losing the state from before the first write.
+func createBackup(path string, data []byte, perm os.FileMode) (string, error) {
+	return createBackupAt(path, data, perm, time.Now())
+}
+
+// createBackupAt is createBackup with the clock handed to it. The name comes
+// from a timestamp, so a test that needs "two backups in the same millisecond"
+// must own the millisecond — reading the clock inside the function makes that
+// condition untestable.
+func createBackupAt(path string, data []byte, perm os.FileMode, at time.Time) (string, error) {
+	stamp := at.Format("20060102-150405.000")
+	for n := 0; n < backupAttempts; n++ {
+		name := path + ".bak-" + stamp
+		if n > 0 {
+			name = fmt.Sprintf("%s.bak-%s-%d", path, stamp, n)
+		}
+		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+		if errors.Is(err, os.ErrExist) {
+			continue // the filesystem just told us this name is taken
+		}
+		if err != nil {
+			return "", fmt.Errorf("backup impossible (%s): %w", name, err)
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			os.Remove(name)
+			return "", fmt.Errorf("backup incomplete (%s): %w", name, err)
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(name)
+			return "", fmt.Errorf("backup incomplete (%s): %w", name, err)
+		}
+		if err := f.Close(); err != nil {
+			return "", fmt.Errorf("backup incomplete (%s): %w", name, err)
+		}
+		return name, nil
+	}
+	return "", fmt.Errorf("no free backup name for %s after %d attempts", path, backupAttempts)
 }
 
 // writeFileAtomic writes data to path without ever leaving a half-written file
@@ -510,9 +552,9 @@ func writeDoc(path string, doc map[string]json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		backup = backupPath(path)
-		if err := os.WriteFile(backup, raw, perm); err != nil {
-			return "", fmt.Errorf("backup impossible (%s): %w", backup, err)
+		backup, err = createBackup(path, raw, perm)
+		if err != nil {
+			return "", err
 		}
 	}
 	out, err := marshalDoc(doc)
