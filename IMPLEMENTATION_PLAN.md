@@ -340,6 +340,54 @@ Do **not** cut the tag until Phases 0–3 are in.
 
 ---
 
+## Phase 6 — SSE keepalive: the servers drop in opencode (found live, not in the review)
+
+**Severity: HIGH** for reliability — it makes servers flake in and out, which is the opposite of
+"declare once, always there". Confirm the severity during investigation: if opencode reconnects
+transparently with no user-visible gap, downgrade to MEDIUM and treat as log noise.
+
+**Symptom (measured, 2026-10-09, opencode's own log):**
+
+```
+mcp connected  server=vision tools=1
+mcp connected  server=playwright tools=25
+   … then, ~2 minutes later …
+mcp transport error  server=vision|playwright|dcc|Agentic_Skills|system
+error="SSE stream disconnected: TimeoutError: The operation timed out."
+```
+
+The pattern repeats every couple of minutes: connect → idle → SSE stream times out → reconnect. From
+the user's side the servers are intermittently absent.
+
+**Where to look.** The manager serves MCP over **Streamable HTTP** via the Go SDK's
+`mcp.NewStreamableHTTPHandler` (`proxy.go`, `web.go`). That protocol keeps a long-lived SSE stream
+open for server→client messages. If the handler sends **no keepalive/heartbeat**, an idle client —
+opencode here — closes the stream on its own HTTP idle timeout. The 5-minute idle-disconnect in the
+backend (`idleTimeout()`) is a *different* mechanism and does not match the ~2-minute cadence, so
+the prime suspect is the SSE stream itself.
+
+**Investigate, in this order:**
+
+1. Read the Go SDK's `StreamableHTTPHandler` (and the `mcp.Server` options it takes) — does it have
+   an SSE ping/keepalive interval, and is it off by default? (`go doc
+   github.com/modelcontextprotocol/go-sdk/mcp.StreamableHTTPHandler` and its options.)
+2. Confirm the two-minute figure is opencode's client idle timeout, not ours — grep the opencode log
+   for the exact gap between `connected` and `transport error` across several cycles.
+3. Decide whether the flapping is benign: does a tool call still succeed immediately after a
+   "transport error", or is the server genuinely unreachable until the next reconnect? This is what
+   sets HIGH vs MEDIUM.
+
+**Likely fix.** Enable an SSE keepalive so the stream never idles out: either a handler option the
+SDK already exposes, or — if it exposes none — a small periodic ping written into the handler's
+underlying response writer, or a shorter server-side idle timer that recycles the stream before the
+client gives up. Do **not** work around it by polling; the keepalive has to live at the transport.
+
+**Verify:** start the manager, start a fresh opencode, and watch its log for **10+ minutes**: zero
+`SSE stream disconnected` lines, the servers stay `mcp connected`, and a tool call succeeds after 10
+minutes of sitting idle. Re-run for each of the four proxy servers.
+
+---
+
 ## End-to-end verification checklist
 
 1. `go build ./... && go vet ./... && gofmt -l .` — clean.
@@ -352,3 +400,4 @@ Do **not** cut the tag until Phases 0–3 are in.
    in-flight session (M4); quitting the tray leaves no orphaned `node`/`npx` (M9).
 6. Screenshots at 1400px and 380px: the matrix is reachable at both widths; the network panel shows
    no external font request.
+7. opencode holds a connection for 10+ minutes with no `SSE stream disconnected` error (Phase 6).
