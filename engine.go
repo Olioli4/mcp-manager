@@ -34,9 +34,9 @@ type Probe struct {
 }
 
 type Action struct {
-	Exe   string   `json:"exe"`
-	Cmd   string   `json:"cmd"`
-	Args  []string `json:"args"`
+	Exe  string   `json:"exe"`
+	Cmd  string   `json:"cmd"`
+	Args []string `json:"args"`
 	// Process: stop by process name (start ignores it, stop uses it).
 	Process string `json:"process"`
 	// Stop only: kill only the processes whose command line
