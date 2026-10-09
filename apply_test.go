@@ -222,6 +222,109 @@ func TestWriteToReadOnlyFileFailsCleanly(t *testing.T) {
 	}
 }
 
+// A DRY RUN MUST NOT WRITE.
+//
+// This is not hypothetical. Refactoring the apply loop into applyToFile turned
+// its early `continue`s into fall-throughs, and the preview went straight on
+// into the write path — a "show me what would change" click would have changed
+// it. The whole promise of `apply` without --write is that it touches nothing,
+// so that promise gets a test.
+func TestDryRunNeverWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	const original = `{"mcpServers":{"old":{"command":"x"}}}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+
+	p := testPlugin(path)
+	want := map[string]any{"new": map[string]any{"url": "http://x"}}
+
+	var buf strings.Builder
+	if err := applyToFile(&buf, p, &Inventory{}, want, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(path)
+	if string(got) != original {
+		t.Errorf("a dry run MODIFIED the file:\n  got  %s\n  want %s", got, original)
+	}
+	after, _ := os.Stat(path)
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Error("a dry run touched the file's modification time")
+	}
+	if baks, _ := filepath.Glob(path + ".bak-*"); len(baks) != 0 {
+		t.Errorf("a dry run created a backup: %v", baks)
+	}
+	if !strings.Contains(buf.String(), "dry-run") {
+		t.Error("the report does not tell the user it was a dry run")
+	}
+}
+
+// The other half of the same promise: with write, it must actually write.
+func TestWriteActuallyWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"old":{"command":"x"}},"keep":42}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf strings.Builder
+	if err := applyToFile(&buf, testPlugin(path), &Inventory{},
+		map[string]any{"new": map[string]any{"url": "http://x"}}, nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), `"http://x"`) {
+		t.Errorf("the write did not happen:\n%s", got)
+	}
+	if !strings.Contains(string(got), "42") {
+		t.Errorf("a key we do not own was lost:\n%s", got)
+	}
+	if baks, _ := filepath.Glob(path + ".bak-*"); len(baks) != 1 {
+		t.Errorf("expected exactly one backup, got %v", baks)
+	}
+}
+
+// And when there is nothing to change, the file must be left completely alone —
+// not rewritten identically.
+func TestNoOpWriteTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.json")
+	body := `{"mcpServers":{"new":{"url":"http://x"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(path)
+
+	var buf strings.Builder
+	if err := applyToFile(&buf, testPlugin(path), &Inventory{},
+		map[string]any{"new": map[string]any{"url": "http://x"}}, nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _ := os.Stat(path)
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Error("an already-up-to-date file was rewritten anyway")
+	}
+	if baks, _ := filepath.Glob(path + ".bak-*"); len(baks) != 0 {
+		t.Errorf("a no-op apply created a backup: %v", baks)
+	}
+	if !strings.Contains(buf.String(), "nothing written") {
+		t.Errorf("the report does not say nothing was written:\n%s", buf.String())
+	}
+}
+
+func testPlugin(path string) *Plugin {
+	return &Plugin{
+		ID: "t", Label: "Test", ConfigPath: path, RootKey: "mcpServers",
+		TypeMap: map[string]string{"http": "http", "stdio": "stdio"},
+		HTTPKey: "url", CommandShape: "string_args", Writer: "file",
+	}
+}
+
 // diffBlock must converge: comparing a block with itself finds nothing.
 func TestDiffBlockIsIdempotent(t *testing.T) {
 	raw := json.RawMessage(`{"a":{"url":"http://x"},"b":{"url":"http://y"}}`)

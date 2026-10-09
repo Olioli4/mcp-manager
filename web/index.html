@@ -42,6 +42,8 @@
   button.act:hover:not(:disabled) { border-color: var(--accent); }
   button.act:disabled { opacity: .35; cursor: default; }
   button.act.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* An armed apply: the same button, now saying what it will do. */
+  button.act.danger { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
   table { border-collapse: collapse; width: 100%; background: var(--panel);
           border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
@@ -171,7 +173,9 @@ function renderClients() {
     </table>
     <div class="row">
       <button class="act primary" id="apply-btn">Apply to clients</button>
+      <button class="act" id="cancel-apply" hidden>Cancel</button>
       <button class="act" id="preview-btn">Preview (writes nothing)</button>
+      <button class="act" id="clear-report" hidden>Clear report</button>
       <span class="hint" id="dirty-hint" style="margin:0"></span>
     </div>
     <pre id="report" hidden></pre>`;
@@ -184,6 +188,9 @@ function renderClients() {
           body: JSON.stringify({ server: cb.dataset.server, client: cb.dataset.client, on: cb.checked })
         });
         dirty = true;
+        // The tick that was just changed is not in the report the user is
+        // looking at any more, so an armed apply would write a stale diff.
+        setApplyArmed(false);
         $('#dirty-hint').textContent = 'unapplied changes — clients will only see them after an apply AND a restart.';
       } catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
     });
@@ -193,27 +200,113 @@ function renderClients() {
   if (dirty) $('#dirty-hint').textContent =
     'unapplied changes — clients will only see them after an apply AND a restart.';
 
-  $('#apply-btn').addEventListener('click', () => doApply(true));
+  $('#apply-btn').addEventListener('click', () => doApply(applyArmed));
   $('#preview-btn').addEventListener('click', () => doApply(false));
+  $('#cancel-apply').addEventListener('click', () => {
+    setApplyArmed(false);
+    toast('Cancelled — nothing was written.');
+  });
+  $('#clear-report').addEventListener('click', () => {
+    setReportShown(false);
+    $('#report').hidden = true;
+    $('#report').textContent = '';
+    renderClients();
+  });
+  // The tab is rebuilt on most refreshes, so the armed state has to be
+  // re-applied to the fresh button, not just set once at click time.
+  setApplyArmed(applyArmed);
 }
 
-async function doApply(write) {
+// ---------------------------------------------------------------------------
+// Applying is the destructive step, so it never happens on the first click.
+//
+// It rewrites four real config files that belong to other applications, and it
+// DELETES from each client every server that is not ticked. A single
+// primary-coloured button that silently does that is the one thing in this UI
+// that can cost someone their client configuration.
+//
+// So: the first click shows exactly what would change — the same honest report
+// the Preview produces — and the button changes to say what the second click
+// will do. A button that cannot be pressed by accident, without a dialog box
+// asking a yes/no question nobody can answer.
+// ---------------------------------------------------------------------------
+let applyArmed = false;
+
+// While a report is on screen, the matrix is NOT re-rendered.
+//
+// Found by driving the real page: the 5-second poll rebuilt the tab mid-apply,
+// so the report — the thing the user was told to read before confirming — was
+// written into a DOM node that had already been thrown away. On screen it
+// simply vanished, and the armed button silently reset. The report is part of
+// the user's working state, like an open form, so it holds the re-render off
+// until it is dismissed.
+let reportShown = false;
+
+function setReportShown(on) {
+  reportShown = on;
+  const c = $('#clear-report');
+  if (c) c.hidden = !on;
+}
+
+function setApplyArmed(on) {
+  applyArmed = on;
+  const b = $('#apply-btn');
+  if (!b) return;
+  b.textContent = on ? 'Write these changes' : 'Apply to clients';
+  b.classList.toggle('danger', on);
+  const c = $('#cancel-apply');
+  if (c) c.hidden = !on;
+}
+
+// reportHasChanges reads the report the server sends back. Server lines look
+// like "  + name", "  ~ name", "  - name"; the dry-run JSON block does not.
+function reportHasChanges(text) {
+  return /^\s*[+~-]\s/m.test(text);
+}
+
+async function doApply(commit) {
   const out = $('#report');
   out.hidden = false;
-  out.textContent = write ? 'applying…' : 'previewing…';
+  setReportShown(true);
+  out.textContent = commit ? 'applying…' : 'checking what would change…';
   try {
     const r = await api('/api/apply', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ write })
+      body: JSON.stringify({ write: commit })
     });
     out.textContent = r.report;
-    if (write) { dirty = false; $('#dirty-hint').textContent = ''; toast('Applied — backups created.'); }
+    if (commit) {
+      setApplyArmed(false);
+      dirty = false;
+      $('#dirty-hint').textContent = '';
+      toast('Applied — backups created.');
+    } else if (reportHasChanges(r.report)) {
+      // Arms the button instead of writing. The report above IS the question.
+      setApplyArmed(true);
+      toast('Review the changes above, then press "Write these changes".');
+    } else {
+      setApplyArmed(false);
+      toast('Nothing to write — every client already matches.');
+    }
   } catch (e) {
     // An apply that fails part-way has ALREADY changed the earlier clients.
     // The server sends back what it managed to do; showing only the error would
     // leave the user believing nothing happened.
-    out.textContent = 'error: ' + e.message + (e.report ? '\n\n--- what happened before the failure ---\n' + e.report : '');
-    toast(e.message, true);
+    const rep = e.report || '';
+    out.textContent = 'error: ' + e.message +
+      (rep ? '\n\n--- everything above still happened ---\n' + rep : '');
+
+    // A client that could not be REACHED must not block writing to the clients
+    // that can. A closed application is a reason to warn, not a reason to make
+    // the whole button useless — otherwise one app being shut down means you
+    // cannot configure any of the others.
+    if (rep && reportHasChanges(rep)) {
+      setApplyArmed(true);
+      toast('Some clients failed — review, then write what is possible.');
+    } else {
+      setApplyArmed(false);
+      toast(e.message, true);
+    }
   }
 }
 
@@ -516,7 +609,9 @@ async function refresh(force) {
   state = s;
   $('#paths').textContent = 'services: ' + state.config + '   ·   ' + state.inventory;
   renderServices();
-  renderClients();
+  // Not while a report is on screen (see setReportShown) nor while a form is
+  // open — rebuilding either would erase what the user is reading or typing.
+  if (!reportShown) renderClients();
   if (!editing) renderServers();
 }
 

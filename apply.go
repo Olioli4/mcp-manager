@@ -582,81 +582,107 @@ func applyTo(w io.Writer, inv *Inventory, write bool) error {
 		return err
 	}
 
+	// A client that cannot be reached is NOT allowed to stop the others.
+	//
+	// The first version returned on the first error, which meant one closed
+	// application made the whole tool unusable: with AJEAN shut down, you could
+	// not even PREVIEW what would change for Claude Code, opencode and VS Code,
+	// because the run died on the first plugin alphabetically. A dry run is
+	// read-only; refusing to do it because a fourth application is closed is
+	// absurd. Each failure is now reported in place and the run continues.
+	var failures []string
+
 	for _, p := range plugins {
 		want, skipped := RenderAll(p, inv)
+
+		var err error
 		if p.IsAPI() {
-			if err := applyToAPI(w, p, inv, want, skipped, write); err != nil {
-				return err
-			}
-			continue
-		}
-
-		path := expandPath(p.ConfigPath)
-		doc, err := readDoc(path)
-		if err != nil {
-			return err
-		}
-		added, changed, removed := diffBlock(doc[p.RootKey], want)
-
-		fmt.Fprintf(w, "==== %s (%s) ====\n", p.Label, p.ID)
-		fmt.Fprintf(w, "target     : %s\n", path)
-		fmt.Fprintf(w, "root key   : %q  (%d server(s) written)\n", p.RootKey, len(want))
-		for _, n := range added {
-			fmt.Fprintf(w, "  + %s\n", n)
-		}
-		for _, n := range changed {
-			fmt.Fprintf(w, "  ~ %s\n", n)
-		}
-		for _, n := range removed {
-			fmt.Fprintf(w, "  - %s   (present at the client, absent from the inventory)\n", n)
-		}
-		if len(added)+len(changed)+len(removed) == 0 {
-			fmt.Fprintf(w, "  = already up to date\n")
-		}
-		for _, n := range skipped {
-			c := inv.Servers[n].Clients
-			fmt.Fprintf(w, "  · %s   (not targeted here: clients=%s)\n", n, strings.Join(c, ","))
-		}
-
-		if !write {
-			// We show the EXACT BLOCK, not just the list of names. It is the
-			// only way to see that one client receives "type: http" where
-			// another does not want it — and to re-read the shape before
-			// imposing it on a file we do not entirely own.
-			block, err := marshalDoc(want)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(w, "\n  block that would be written into %q:\n", p.RootKey)
-			for _, line := range strings.Split(strings.TrimRight(string(block), "\n"), "\n") {
-				fmt.Fprintf(w, "    %s\n", line)
-			}
-			fmt.Fprintf(w, "\n(dry-run — nothing is written. Add --write to apply.)\n\n")
-			continue
-		}
-
-		// Nothing to change: do NOT rewrite.
-		//
-		// The old version wrote the file anyway, so every no-op apply still
-		// re-encoded a document we do not own and left a backup to prove it.
-		// An apply that changes nothing must touch nothing.
-		if len(added)+len(changed)+len(removed) == 0 {
-			fmt.Fprintf(w, "\n  nothing written — the file already matches.\n\n")
-			continue
-		}
-
-		if err := setBlock(doc, p.RootKey, want); err != nil {
-			return err
-		}
-		backup, err := writeDoc(path, doc)
-		if err != nil {
-			return err
-		}
-		if backup != "" {
-			fmt.Fprintf(w, "\n  written. backup: %s\n\n", backup)
+			err = applyToAPI(w, p, inv, want, skipped, write)
 		} else {
-			fmt.Fprintf(w, "\n  written (the file did not exist).\n\n")
+			err = applyToFile(w, p, inv, want, skipped, write)
 		}
+		if err != nil {
+			fmt.Fprintf(w, "==== %s (%s) ====\n", p.Label, p.ID)
+			fmt.Fprintf(w, "  FAILED — %v\n\n", err)
+			failures = append(failures, fmt.Sprintf("%s: %v", p.Label, err))
+		}
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%d client(s) could not be processed — everything above still applies:\n  - %s",
+			len(failures), strings.Join(failures, "\n  - "))
+	}
+	return nil
+}
+
+// applyToFile is the file writer for one client: render, diff, show, and (only
+// with write) replace the one root key.
+func applyToFile(w io.Writer, p *Plugin, inv *Inventory, want map[string]any, skipped []string, write bool) error {
+	path := expandPath(p.ConfigPath)
+	doc, err := readDoc(path)
+	if err != nil {
+		return err
+	}
+	added, changed, removed := diffBlock(doc[p.RootKey], want)
+
+	fmt.Fprintf(w, "==== %s (%s) ====\n", p.Label, p.ID)
+	fmt.Fprintf(w, "target     : %s\n", path)
+	fmt.Fprintf(w, "root key   : %q  (%d server(s) written)\n", p.RootKey, len(want))
+	for _, n := range added {
+		fmt.Fprintf(w, "  + %s\n", n)
+	}
+	for _, n := range changed {
+		fmt.Fprintf(w, "  ~ %s\n", n)
+	}
+	for _, n := range removed {
+		fmt.Fprintf(w, "  - %s   (present at the client, absent from the inventory)\n", n)
+	}
+	if len(added)+len(changed)+len(removed) == 0 {
+		fmt.Fprintf(w, "  = already up to date\n")
+	}
+	for _, n := range skipped {
+		c := inv.Servers[n].Clients
+		fmt.Fprintf(w, "  · %s   (not targeted here: clients=%s)\n", n, strings.Join(c, ","))
+	}
+
+	if !write {
+		// We show the EXACT BLOCK, not just the list of names. It is the
+		// only way to see that one client receives "type: http" where
+		// another does not want it — and to re-read the shape before
+		// imposing it on a file we do not entirely own.
+		block, err := marshalDoc(want)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "\n  block that would be written into %q:\n", p.RootKey)
+		for _, line := range strings.Split(strings.TrimRight(string(block), "\n"), "\n") {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+		fmt.Fprintf(w, "\n(dry-run — nothing is written. Add --write to apply.)\n\n")
+		return nil
+	}
+
+	// Nothing to change: do NOT rewrite.
+	//
+	// The old version wrote the file anyway, so every no-op apply still
+	// re-encoded a document we do not own and left a backup to prove it.
+	// An apply that changes nothing must touch nothing.
+	if len(added)+len(changed)+len(removed) == 0 {
+		fmt.Fprintf(w, "\n  nothing written — the file already matches.\n\n")
+		return nil
+	}
+
+	if err := setBlock(doc, p.RootKey, want); err != nil {
+		return err
+	}
+	backup, err := writeDoc(path, doc)
+	if err != nil {
+		return err
+	}
+	if backup != "" {
+		fmt.Fprintf(w, "\n  written. backup: %s\n\n", backup)
+	} else {
+		fmt.Fprintf(w, "\n  written (the file did not exist).\n\n")
 	}
 	return nil
 }

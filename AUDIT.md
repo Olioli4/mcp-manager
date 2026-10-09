@@ -29,7 +29,7 @@ found, with their evidence, because the reasoning is what stops them coming back
 | LOW-2 rewrites the file when already up to date | **fixed** — a no-op apply now touches nothing (verified: mtimes unchanged) |
 | MEDIUM-4 no atomic write | **fixed** — temp file + fsync + rename, permissions preserved |
 | MEDIUM-2 backup names collide | **fixed** — milliseconds plus random suffix |
-| HIGH Apply has no confirmation | open — design agreed (render the diff, second click), not yet built |
+| HIGH Apply has no confirmation | **fixed** — the first click shows the diff and arms the button; only a second click writes |
 | HIGH matrix unusable at narrow widths | open |
 | MEDIUM-1 systray data race · MEDIUM-3 PowerShell interpolation · LOW-3…LOW-7 | open |
 
