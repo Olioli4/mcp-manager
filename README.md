@@ -30,10 +30,34 @@ Everything runs on the host, in the tray. Nothing listens on the network — onl
 ## Quick start
 
 ```
+go build -o manager.exe .
+go build -o manager-gui.exe -ldflags "-H=windowsgui" .
+
 manager-gui.exe            # tray icon; brings up the web UI on 127.0.0.1:8787
 ```
 
 Then right-click the tray icon → **Open the configuration…**
+
+### First run
+
+There is no `services.json` or `inventory.json` in this repository, and that is deliberate: both
+describe **one machine** — your ComfyUI path, your Blender, your browser profile. They are a map of
+a computer, useless to anyone else.
+
+Instead the repository ships `services.example.json` and `inventory.example.json`, and on first
+launch the manager **copies them into place** and starts. You get a running program with three
+placeholder services and four placeholder servers to edit, rather than an error about a file you
+have never heard of.
+
+```
+services.json     ← copied from services.example.json   (yours; git-ignored)
+inventory.json    ← copied from inventory.example.json  (yours; git-ignored)
+```
+
+Edit them, or edit the inventory from the web UI. Neither is ever committed.
+
+**Windows only.** The manager starts and stops native programs, drives the tray, and speaks to the
+Chrome DevTools Protocol — it is built for Windows and does not pretend otherwise.
 
 ```
 manager.exe list           # the host programs and their live state
@@ -51,6 +75,9 @@ manager.exe apply --write  # writes it, after a timestamped backup
 
 Both live next to the executable — resolved **absolutely**, because a process started by a shortcut,
 WMI or the Task Scheduler does not have the app folder as its working directory.
+
+Both are **yours, not the repository's**. The `.example.json` twins are what gets committed; the
+manager copies them on first run and you edit the real ones.
 
 ### `services.json` — the HOST programs
 

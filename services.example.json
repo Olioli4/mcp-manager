@@ -1,0 +1,98 @@
+{
+  "$comment": [
+    "SERVICES MANIFEST — copy this to services.json and edit it for your machine.",
+    "",
+    "The manager starts this file MISSING by copying it, so on a fresh clone you",
+    "get a working (if useless) configuration rather than a crash. Then you edit",
+    "it. Every path below is a placeholder.",
+    "",
+    "A SERVICE is a program on this machine that an MCP server depends on — a",
+    "browser to drive, a local model server, a 3D application. The manager probes",
+    "it, starts it when a request needs it, and stops it.",
+    "",
+    "Fields:",
+    "  id        short unique identifier, no spaces (it becomes an argument to the MCP tools)",
+    "  label     human-readable name, shown in the UI and the tray",
+    "  why       WHY this service exists. This is what an agent reads first.",
+    "  notes     list of traps / preconditions / ordering (the KNOWLEDGE)",
+    "  requires  ids of other services that must be running BEFORE this one",
+    "  start     { exe, args }  or  { cmd, args }   -> how to launch it",
+    "  stop      { process }     or  { cmd, args }   -> how to stop it",
+    "  probe     { process } or { http, expect } or { port }   -> how to tell whether it runs",
+    "",
+    "Probe 'http':    GET the URL; alive if the status is in 'expect' (default 2xx).",
+    "Probe 'process': a process with that name exists.",
+    "Probe 'port':    something is listening on that local TCP port.",
+    "",
+    "start.exE is launched detached, so it survives the manager. Leave 'args' out",
+    "if the program needs none.",
+    "",
+    "stop.only_if_cmdline_matches is the important one: it kills only the processes",
+    "whose command line contains that string. That is what lets you stop 'the debug",
+    "Chrome' without closing the browser you are actually using."
+  ],
+
+  "settings": {
+    "web_host": "127.0.0.1",
+    "web_port": 8787,
+    "default_probe_timeout_s": 90,
+    "poll_seconds": 5
+  },
+
+  "services": [
+    {
+      "id": "chrome-cdp",
+      "label": "Chrome (debug port)",
+      "why": "A browser an agent can drive, over the Chrome DevTools Protocol.",
+      "notes": [
+        "A dedicated --user-data-dir is MANDATORY: since Chrome 136, remote debugging is refused on the default profile.",
+        "This is a SECOND browser with its own profile, so it has none of your cookies or logins.",
+        "The playwright MCP server ATTACHES to this Chrome; it never launches one itself."
+      ],
+      "requires": [],
+      "start": {
+        "exe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "args": [
+          "--remote-debugging-port=9222",
+          "--user-data-dir=C:\\Users\\YOURNAME\\chrome-debug",
+          "--no-first-run",
+          "--no-default-browser-check"
+        ]
+      },
+      "stop": { "process": "chrome.exe", "only_if_cmdline_matches": "chrome-debug" },
+      "probe": { "http": "http://127.0.0.1:9222/json/version" }
+    },
+
+    {
+      "id": "local-model",
+      "label": "Local model server (example: an HTTP probe)",
+      "why": "Placeholder for a local inference server your MCP servers talk to.",
+      "notes": [
+        "The first call after an idle period is slow: the model has to load.",
+        "If your server exposes a health endpoint, probe THAT rather than the API root."
+      ],
+      "requires": [],
+      "start": {
+        "exe": "C:\\path\\to\\your\\server.exe",
+        "args": ["--port", "8080"]
+      },
+      "stop": { "process": "server.exe" },
+      "probe": { "http": "http://127.0.0.1:8080/health" }
+    },
+
+    {
+      "id": "desktop-app",
+      "label": "Desktop application (example: a process probe)",
+      "why": "Placeholder for an application that only exposes its tools while it is open.",
+      "notes": [
+        "Some applications load their MCP adapter INSIDE themselves, at startup. There is no separate server to launch — the application being open IS the server.",
+        "That is why the probe is by process: there is no port to test.",
+        "Starting it opens a window. That is not a quiet background start, and it is worth saying so in the notes."
+      ],
+      "requires": [],
+      "start": { "exe": "C:\\Program Files\\YourApp\\yourapp.exe" },
+      "stop": { "process": "yourapp.exe" },
+      "probe": { "process": "yourapp.exe" }
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "$comment": [
+    "INVENTORY OF MCP SERVERS — copy this to inventory.json and edit it.",
+    "",
+    "Each server is declared ONCE, here. The plugins (plugins/ folder) translate it",
+    "into each client's own format. You never edit a client's config by hand: you",
+    "edit here, then `manager apply` writes everywhere.",
+    "",
+    "The 'system' entry below is the manager itself and should stay: it is how the",
+    "manager appears to your agents, so they can ask what is running and start what",
+    "is missing. Deleting it is allowed but you lose that.",
+    "",
+    "Fields of a server:",
+    "  transport       'stdio' (the client launches a process) | 'http' (the client calls a URL)",
+    "  command / args  for stdio: the command and its arguments",
+    "  url             for http: the MCP endpoint",
+    "  why             WHY this server exists — the first thing an agent reads",
+    "  notes           list of traps / preconditions (the KNOWLEDGE that travels with the config)",
+    "  needs_service   id of a service from services.json to start before use (empty = none)",
+    "  clients         list of plugin ids that receive this server.",
+    "                  ABSENT or empty = ALL clients (a deliberate default: a client added",
+    "                  tomorrow inherits everything, and you restrict it afterwards if needed).",
+    "                  An unknown id is REFUSED at startup, not silently ignored.",
+    "",
+    "SECRETS RULE: NEVER put a key or a token here. Reference an environment variable",
+    "name instead; the client will receive {\"env\": {\"NAME\": \"${NAME}\"}}."
+  ],
+  "servers": {
+    "system": {
+      "manager": true,
+      "transport": "http",
+      "url": "http://127.0.0.1:8787/mcp",
+      "why": "Manager of this machine's programs: see what is running, start what is missing.",
+      "notes": [
+        "This is the concierge: services_list shows the REAL state and the WHY of each program.",
+        "It runs in the user's session (notification-area icon). If it is off, nothing can start it: it is the single bootstrap point."
+      ]
+    },
+
+    "example-stdio": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-mcp-server@latest"],
+      "why": "Example of a server the client launches itself, over stdio.",
+      "notes": [
+        "npx is used here because it is the most common; a direct binary works too.",
+        "On Windows some clients cannot launch 'npx' (a .cmd) without a shell — the opencode plugin handles that with command_prefix."
+      ]
+    },
+
+    "example-http": {
+      "transport": "http",
+      "url": "http://127.0.0.1:9999/mcp",
+      "why": "Example of a server already listening on a port, which the manager watches over.",
+      "notes": [
+        "If this server needs a program running to exist, name it in needs_service and the manager will start it on the first call.",
+        "The tools stay VISIBLE even while the program is stopped, because the list is cached on disk."
+      ],
+      "needs_service": "local-model"
+    },
+
+    "example-restricted": {
+      "transport": "http",
+      "url": "http://127.0.0.1:9998/mcp",
+      "why": "Example of a server given to only SOME clients — the point of the matrix.",
+      "notes": [
+        "Absent 'clients' means every client. A list means only those. An empty list means none.",
+        "Use it to save context: a small local model does not need twenty tools it will never call."
+      ],
+      "clients": ["claude-code"]
+    }
+  }
+}

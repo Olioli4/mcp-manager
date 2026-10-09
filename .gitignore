@@ -1,3 +1,21 @@
+# ---------------------------------------------------------------------------
+# YOUR MACHINE, not the tool.
+#
+# These two files describe one particular setup: absolute paths to your
+# ComfyUI, your Blender, your browser profile. They are useless to anyone else
+# and they are a map of your machine. The repository ships
+# services.example.json and inventory.example.json instead, and the manager
+# copies them into place on first run.
+#
+# Your real files stay exactly where they are on disk — this only stops git
+# from tracking them.
+# ---------------------------------------------------------------------------
+services.json
+inventory.json
+
+# Agent / editor configuration, not part of the product.
+.claude/
+
 # Built binaries — rebuilt with `go build`, never committed.
 *.exe
 *.exe~

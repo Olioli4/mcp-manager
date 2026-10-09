@@ -32,14 +32,21 @@ const usage = `service manager — E:\Coding\MCP_HUB
 
 func main() {
 	args := os.Args[1:]
+	resident := len(args) == 0
 
-	engine, err := LoadEngine(ManifestPath())
+	engine, err := loadEngine()
 	if err != nil {
+		// With no arguments this was launched from a shortcut or the Start menu,
+		// and the binary is built with -H=windowsgui: no console, so stderr goes
+		// nowhere. Without this dialog the app simply fails to appear.
+		if resident {
+			fatalDialog("MCP Manager cannot start", err.Error())
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 
-	if len(args) == 0 {
+	if resident {
 		runResident(engine)
 		return
 	}
@@ -87,6 +94,40 @@ func main() {
 func fail(msg string) {
 	fmt.Fprintln(os.Stderr, "error:", msg)
 	os.Exit(1)
+}
+
+// loadEngine seeds a missing configuration from the shipped example, then loads
+// it.
+//
+// Why seed rather than refuse: a freshly cloned repository has no services.json
+// — it is machine-specific and deliberately not committed. Refusing to start
+// would mean the first experience of this tool is an error message about a file
+// the user has never heard of. Copying the example gives them something that
+// starts, shows the shape, and is theirs to edit.
+func loadEngine() (*Engine, error) {
+	for _, name := range []string{"services.json", "inventory.json"} {
+		if _, err := os.Stat(assetPath(name)); os.IsNotExist(err) {
+			if ex := seedFromExample(name); ex != "" {
+				logf("no %s — created one from %s; edit it for this machine", name, ex)
+			}
+		}
+	}
+	return LoadEngine(ManifestPath())
+}
+
+// seedFromExample copies <name>.example.json to <name>. It returns the example's
+// filename, or "" when there was nothing to copy — in which case the caller
+// carries on and reports the real error.
+func seedFromExample(name string) string {
+	ex := strings.TrimSuffix(name, ".json") + ".example.json"
+	src, err := os.ReadFile(assetPath(ex))
+	if err != nil {
+		return ""
+	}
+	if err := os.WriteFile(assetPath(name), src, 0o644); err != nil {
+		return ""
+	}
+	return ex
 }
 
 func cmdList(e *Engine) {
