@@ -1,0 +1,62 @@
+name: test
+
+# Runs on every push and every pull request. The release workflow only fires on
+# a tag, so without this a contribution gets no signal at all until it is
+# already being released — which is too late to be useful.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Windows on purpose, not by default. The manager starts and stops native
+    # programs, drives the tray, and speaks to the Chrome DevTools Protocol —
+    # it is a Windows program, and testing it on Linux would test a program
+    # nobody runs.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      # -count=1 because a cached result proves only that the tests passed
+      # before the change, which is the opposite of what CI is for.
+      - name: test
+        run: go test -count=1 ./...
+
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # The archive must carry the example configs and the plugins: on first run
+      # the manager copies services.example.json into place so a fresh install
+      # starts instead of erroring. Ship the binary without them and that path
+      # breaks — so the check is that a built binary can actually seed itself.
+      - name: the examples are present and parse
+        shell: bash
+        run: |
+          for f in services.example.json inventory.example.json plugins/*.json; do
+            python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8'))" "$f" \
+              || { echo "$f is not valid JSON"; exit 1; }
+          done
+          test -f services.example.json && test -f inventory.example.json
+          echo "examples present and valid"

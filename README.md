@@ -10,6 +10,12 @@ A **local, native, Docker-free** tool that owns three jobs which are really one:
 
 Everything runs on the host, in the tray. Nothing listens on the network — only `127.0.0.1`.
 
+![The matrix: which MCP servers each client receives](./docs/matrix.png)
+
+*The matrix is the point. A tick means that server is written into that client's config; the whole
+block is replaced on every apply, so unticking is how you take a server away. `example-restricted`
+above is given to Claude Code only — that is how you save context on a small local model.*
+
 ```
                  ┌──────────────┐
    inventory.json│   MANAGER    │  services.json
@@ -37,6 +43,11 @@ mcp-manager-tray.exe            # tray icon; brings up the web UI on 127.0.0.1:8
 ```
 
 Then right-click the tray icon → **Open the configuration…**
+
+![The Services tab: every program probed live, with why it exists and how to start it](./docs/services.png)
+
+*Services are the host programs the MCP servers depend on. The state shown is probed at the moment
+you load the page — reality, not what we believe we left behind.*
 
 ### First run
 
