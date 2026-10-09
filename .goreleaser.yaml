@@ -83,9 +83,9 @@ release:
 #
 # scoop:
 #   bucket:
-#     owner: YOUR-GITHUB-USER
+#     owner: Olioli4
 #     name: scoop-bucket
-#   homepage: https://github.com/YOUR-GITHUB-USER/mcp-manager
+#   homepage: https://github.com/Olioli4/mcp-manager
 #   description: One inventory for your MCP servers; a plugin per client.
 #   license: MIT
 #
@@ -95,13 +95,13 @@ release:
 # winget:
 #   - publisher: YourName
 #     package_identifier: YourName.mcp-manager
-#     homepage: https://github.com/YOUR-GITHUB-USER/mcp-manager
+#     homepage: https://github.com/Olioli4/mcp-manager
 #     short_description: One inventory for your MCP servers; a plugin per client.
 #     license: MIT
-#     publisher_url: https://github.com/YOUR-GITHUB-USER
-#     publisher_support_url: https://github.com/YOUR-GITHUB-USER/mcp-manager/issues
+#     publisher_url: https://github.com/Olioli4
+#     publisher_support_url: https://github.com/Olioli4/mcp-manager/issues
 #     repository:
-#       owner: YOUR-GITHUB-USER
+#       owner: Olioli4
 #       name: mcp-manager
 #       branch: main
 #     # winget requires a tagged release before it will accept a manifest.

@@ -1,8 +1,4 @@
-// The module path is a PLACEHOLDER. For `go install` to work from a published
-// repository, set it to that repository, e.g.:
-//     module github.com/<you>/mcp-manager
-// Nothing imports this package, so the name only affects fetching.
-module mcp-manager
+module github.com/Olioli4/mcp-manager
 
 go 1.26
 
