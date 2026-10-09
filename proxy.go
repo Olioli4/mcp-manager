@@ -132,7 +132,7 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 		b.mu.Unlock()
 		return err
 	}
-	
+
 	b.mu.Lock()
 	b.session = sess
 	b.mu.Unlock()
@@ -142,7 +142,7 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 		b.mu.Lock()
 		b.tools = lt.Tools
 		b.mu.Unlock()
-		
+
 		saveToolCache(b.name, lt.Tools)
 		b.rebuildServer()
 		logf("proxy %s: %d tool(s) cached", b.name, len(lt.Tools))
@@ -156,7 +156,7 @@ func (b *backend) ensureUpstream(ctx context.Context, mayStart bool) error {
 		b.idleTimer = time.AfterFunc(idleTimeout(), b.idleTimeoutFunc)
 	}
 	b.mu.Unlock()
-	
+
 	return nil
 }
 
@@ -366,7 +366,7 @@ func ReloadProxies(e *Engine) error {
 		b.dropSession()
 	}
 	setProxies(fresh)
-	
+
 	// Warm up newly added servers that have an empty cache.
 	for name, b := range fresh {
 		if old[name] == nil {
