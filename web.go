@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -94,8 +95,78 @@ func startWeb(e *Engine) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("port %d unavailable: %w", port, err)
 	}
-	go func() { _ = http.Serve(ln, mux) }()
+	// localOnly wraps EVERYTHING, the API and the MCP surface alike.
+	go func() { _ = http.Serve(ln, localOnly(mux)) }()
 	return "http://" + addr, nil
+}
+
+// loopbackHost reports whether a hostname is this machine's own loopback.
+func loopbackHost(h string) bool {
+	h = strings.Trim(strings.ToLower(h), "[]")
+	if i := strings.LastIndex(h, "%"); i >= 0 { // IPv6 zone, e.g. fe80::1%eth0
+		h = h[:i]
+	}
+	switch h {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	// The whole 127.0.0.0/8 block is loopback.
+	if strings.HasPrefix(h, "127.") {
+		return true
+	}
+	return false
+}
+
+// localOnly refuses any request that did not come from this machine.
+//
+// Two checks, because they close two DIFFERENT doors, and this server has no
+// authentication — it listens on loopback and nothing else stands in the way.
+//
+//   - Host. A browser can be aimed at an attacker's domain whose DNS record
+//     points at 127.0.0.1: a "DNS rebinding" attack. The request then arrives
+//     here carrying Host: attacker.example. Accepting it makes every endpoint
+//     on this server reachable from a web page.
+//
+//   - Origin. A cross-origin POST is made BY another site. The browser stamps
+//     it with an Origin header; a request from our own page carries ours. Only
+//     loopback origins are accepted.
+//
+// Why the Origin check cannot simply be dropped as "browsers won't do that":
+// a POST with Content-Type: text/plain is a CORS *simple request* — no
+// preflight is sent — and a bare HTML <form> can send one with no JavaScript at
+// all. Nothing upstream stops it.
+//
+// What this closed, measured on 2026-10-09 before the fix: a cross-origin POST
+// reached /api/server, replaced an inventory server with `cmd /c …`, and
+// because the CACHED tool list for that name survived, the next tool call on
+// /mcp/<name> executed the planted command. Arbitrary code execution from any
+// page the user visited.
+//
+// Loopback origins are allowed on ANY port, not just ours: AJEAN drives us from
+// its own web UI on :8090. That is safe — a page cannot forge the Origin header
+// — and it keeps a local app able to talk to us.
+func localOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !loopbackHost(host) {
+			logf("refused: Host %q is not loopback (%s %s)", r.Host, r.Method, r.URL.Path)
+			http.Error(w, "forbidden: this server only answers on loopback", http.StatusForbidden)
+			return
+		}
+
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || !loopbackHost(u.Hostname()) {
+				logf("refused: Origin %q (%s %s)", origin, r.Method, r.URL.Path)
+				http.Error(w, "forbidden: cross-origin request refused", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------------------------------------------------------------------------
