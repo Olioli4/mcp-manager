@@ -1,0 +1,43 @@
+{
+  "$comment": [
+    "PLUGIN — how to translate the inventory into VS Code's MCP config.",
+    "",
+    "WHERE. VS Code's USER level is NOT settings.json: it is",
+    "    %APPDATA%\\Code\\User\\mcp.json      (a separate file, root key 'servers')",
+    "Verified 2026-10-09 on VS Code 1.141.0 by letting VS Code write it itself:",
+    "`code --add-mcp '{\"name\":…,\"command\":…}'`. The file appeared in exactly that",
+    "place, with that shape. So this is not a guess.",
+    "",
+    "TRAP AVOIDED: VS Code's settings.json is JSONC — it contains comments (// …).",
+    "Our writer goes through encoding/json, which REFUSES comments: applying to",
+    "settings.json would fail — or, worse, would erase them if the parser were loosened.",
+    "That is why we do not touch it, and why the legacy 'mcp.servers' key inside it is ignored.",
+    "",
+    "SHAPE. A stdio server is written WITHOUT a 'type' field:",
+    "    {\"command\": …, \"args\": […]}",
+    "That is what `code --add-mcp` wrote. Hence 'omit_type' below — without it, our",
+    "renderer would add 'type: stdio' everywhere.",
+    "Over http the type is required and is 'http'.",
+    "",
+    "ROOT-LEVEL 'inputs': VS Code declares values it prompts the user for (passwords)",
+    "there, referenced afterwards as ${input:…}. We write ONLY doc['servers'], so that",
+    "block survives every apply.",
+    "",
+    "SCOPE: the path is that of the DEFAULT VS Code profile. A user with several profiles",
+    "has one mcp.json per profile — this plugin writes only the first. To be dealt with",
+    "the day it becomes a problem, not before."
+  ],
+  "id": "vscode",
+  "label": "VS Code",
+  "config_path": "~\\AppData\\Roaming\\Code\\User\\mcp.json",
+  "root_key": "servers",
+  "type_map": {
+    "http": "http"
+  },
+  "omit_type": [
+    "stdio"
+  ],
+  "command_shape": "string_args",
+  "http_key": "url",
+  "proxy_base": "http://127.0.0.1:8787/mcp"
+}

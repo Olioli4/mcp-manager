@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Manager</title>
+<!-- Inline icon: no file beside it, no 404 in the console. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232f81f7'/><circle cx='16' cy='16' r='6' fill='white'/></svg>">
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171d24; --panel2: #1e252e; --line: #2a333d;
+    --fg: #e6edf3; --dim: #8b97a4; --accent: #2f81f7; --ok: #3fb950; --off: #6e7681;
+    --warn: #d29922; --bad: #f85149;
+    color-scheme: dark;   /* without this, dropdowns render on a white background */
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--dim); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+  nav { display: flex; gap: 4px; padding: 10px 24px 0; border-bottom: 1px solid var(--line); }
+  nav button { background: none; border: 0; color: var(--dim); padding: 8px 14px;
+               cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+  nav button:hover { color: var(--fg); }
+  nav button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  main { padding: 22px 24px 60px; max-width: 1100px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--off); }
+  .why { color: var(--fg); opacity: .85; margin: 8px 0 0; font-size: 13px; }
+  .detail { color: var(--dim); font-size: 12px; font-family: ui-monospace, Consolas, monospace;
+            margin-top: 6px; word-break: break-word; }
+  ul.notes { margin: 10px 0 0; padding-left: 18px; color: var(--dim); font-size: 12.5px; }
+  ul.notes li { margin: 3px 0; }
+  .row { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  button.act { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+               border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+  button.act:hover:not(:disabled) { border-color: var(--accent); }
+  button.act:disabled { opacity: .35; cursor: default; }
+  button.act.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  table { border-collapse: collapse; width: 100%; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: var(--panel2); font-weight: 600; font-size: 13px; }
+  th.rot, td.rot { text-align: center; width: 110px; }
+  tr:last-child td { border-bottom: 0; }
+  td.name { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  td .tag { color: var(--dim); font-size: 11.5px; margin-left: 8px; }
+  input[type=checkbox] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--accent); }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 14px; overflow: auto; font-size: 12.5px; max-height: 420px; }
+  .hint { color: var(--dim); font-size: 12.5px; margin: 0 0 16px; }
+  .toast { position: fixed; right: 18px; bottom: 18px; background: var(--panel2);
+           border: 1px solid var(--line); border-left: 3px solid var(--accent);
+           padding: 10px 16px; border-radius: 6px; font-size: 13px; max-width: 520px;
+           opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.err { border-left-color: var(--bad); }
+
+  /* --- inventory form --- */
+  label.f { display: block; margin: 12px 0 4px; font-size: 12.5px; color: var(--dim); }
+  input[type=text], textarea, select {
+    width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 13px; }
+  input[type=text]:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 54px; resize: vertical;
+             font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .form { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+          padding: 14px 18px 18px; margin-bottom: 20px; }
+  .form h3 { margin: 0 0 4px; font-size: 15px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 14px 0 0; padding: 6px 12px 12px; }
+  legend { color: var(--dim); font-size: 12px; padding: 0 6px; }
+  .chk { display: inline-flex; align-items: center; gap: 7px; margin: 4px 16px 4px 0; font-size: 13px; }
+  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--line);
+          border-radius: 999px; padding: 1px 9px; font-size: 11px; color: var(--dim); margin-left: 6px; }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCP Manager</h1>
+  <span class="sub" id="paths"></span>
+</header>
+<nav>
+  <button data-tab="services" class="active">Services</button>
+  <button data-tab="clients">MCP servers by client</button>
+  <button data-tab="servers">Inventory</button>
+</nav>
+<main>
+  <section id="tab-services"></section>
+  <section id="tab-clients" hidden></section>
+  <section id="tab-servers" hidden></section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let state = null, dirty = false;
+
+function toast(msg, isErr) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.className = 'toast'; }, 5000);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+// load() is defined further down, together with poll() — both share the same render.
+
+// --- Services -------------------------------------------------------------
+function renderServices() {
+  $('#tab-services').innerHTML =
+    '<p class="hint">The state is probed live on every load — this is reality, not what we believe we left behind.</p>' +
+    '<div class="grid">' + state.services.map(s => `
+      <div class="card">
+        <h3><span class="dot ${s.running ? 'on' : 'off'}"></span>${esc(s.label)}</h3>
+        <div class="detail">${esc(s.detail)}</div>
+        ${s.why ? `<p class="why">${esc(s.why)}</p>` : ''}
+        ${s.notes?.length ? `<ul class="notes">${s.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+        <div class="row">
+          <button class="act" data-svc="${esc(s.id)}" data-verb="start" ${s.running ? 'disabled' : ''}>Start</button>
+          <button class="act" data-svc="${esc(s.id)}" data-verb="stop" ${s.running ? '' : 'disabled'}>Stop</button>
+        </div>
+      </div>`).join('') + '</div>';
+}
+
+// --- Client × server matrix ------------------------------------------------
+function renderClients() {
+  const clients = state.plugins;
+  const names = Object.keys(state.servers).sort();
+  if (!clients.length || !names.length) {
+    $('#tab-clients').innerHTML = '<p class="hint">Nothing to show: you need at least one plugin and one server.</p>';
+    return;
+  }
+  $('#tab-clients').innerHTML = `
+    <p class="hint">A tick = this server is written into this client's config.
+       The whole block is <strong>replaced</strong> on every apply: whatever is not ticked disappears from the client.
+       Unticking is mainly how you <strong>save context</strong> when you switch to a small local model.</p>
+    <table>
+      <thead><tr><th>Server</th>${clients.map(c => `<th class="rot">${esc(c.label)}</th>`).join('')}</tr></thead>
+      <tbody>${names.map(n => {
+        const s = state.servers[n];
+        return `<tr>
+          <td class="name">${esc(n)}<span class="tag">${esc(s.transport)}${s.needs_service ? ' · needs ' + esc(s.needs_service) : ''}</span></td>
+          ${clients.map(c => `<td class="rot"><input type="checkbox" data-server="${esc(n)}" data-client="${esc(c.id)}"
+              ${state.matrix[c.id]?.[n] ? 'checked' : ''}></td>`).join('')}
+        </tr>`;
+      }).join('')}</tbody>
+    </table>
+    <div class="row">
+      <button class="act primary" id="apply-btn">Apply to clients</button>
+      <button class="act" id="preview-btn">Preview (writes nothing)</button>
+      <span class="hint" id="dirty-hint" style="margin:0"></span>
+    </div>
+    <pre id="report" hidden></pre>`;
+
+  $('#tab-clients').querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      try {
+        await api('/api/toggle', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ server: cb.dataset.server, client: cb.dataset.client, on: cb.checked })
+        });
+        dirty = true;
+        $('#dirty-hint').textContent = 'unapplied changes — clients will only see them after an apply AND a restart.';
+      } catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
+    });
+  });
+  // The "not applied" reminder is rewritten here: the page refreshes on its own,
+  // so leaving it out of the render would erase it on the first refresh.
+  if (dirty) $('#dirty-hint').textContent =
+    'unapplied changes — clients will only see them after an apply AND a restart.';
+
+  $('#apply-btn').addEventListener('click', () => doApply(true));
+  $('#preview-btn').addEventListener('click', () => doApply(false));
+}
+
+async function doApply(write) {
+  const out = $('#report');
+  out.hidden = false;
+  out.textContent = write ? 'applying…' : 'previewing…';
+  try {
+    const r = await api('/api/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ write })
+    });
+    out.textContent = r.report;
+    if (write) { dirty = false; $('#dirty-hint').textContent = ''; toast('Applied — backups created.'); }
+  } catch (e) { out.textContent = 'error: ' + e.message; toast(e.message, true); }
+}
+
+// --- Inventory (editable) --------------------------------------------------
+// This is where a human holds the source of truth: add, modify, rename,
+// delete a server — without opening a text editor.
+let editing = null;   // null | { key: <current name, "" when creating>, spec: {...} }
+
+function blankSpec() {
+  return { transport: 'stdio', command: '', args: [], url: '', why: '', notes: [],
+           needs_service: '', clients: null, manager: false, direct: false };
+}
+
+// splitArgs splits a command line like a shell does: spaces separate, quotes
+// protect. Without it you could not write an argument containing a space — and
+// "--cdp-endpoint http://…" would become ONE argument.
+function splitArgs(s) {
+  const out = []; let cur = '', q = null;
+  for (const ch of s) {
+    if (q) { if (ch === q) q = null; else cur += ch; }
+    else if (ch === '"' || ch === "'") q = ch;
+    else if (/\s/.test(ch)) { if (cur) { out.push(cur); cur = ''; } }
+    else cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function formHTML() {
+  const s = editing.spec;
+  const svcIds = state.services.map(x => x.id);
+  const all = s.clients === null;           // null = everyone, [] = nobody
+  return `<div class="form">
+    <h3>${editing.key ? 'Edit "' + esc(editing.key) + '"' : 'New MCP server'}</h3>
+    <p class="hint" style="margin:0">Writes into inventory.json. Nothing is sent to the clients
+       until you click <strong>Apply</strong>.</p>
+
+    <div class="two">
+      <div>
+        <label class="f" for="f-name">name — becomes the key, and the URL /mcp/&lt;name&gt;</label>
+        <input type="text" id="f-name" value="${esc(editing.key)}" placeholder="e.g. vision">
+      </div>
+      <div>
+        <label class="f" for="f-transport">transport</label>
+        <select id="f-transport">
+          <option value="stdio"${s.transport === 'stdio' ? ' selected' : ''}>stdio — the manager launches the program</option>
+          <option value="http"${s.transport === 'http' ? ' selected' : ''}>http — the program is already listening</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="row-stdio">
+      <label class="f" for="f-command">command</label>
+      <input type="text" id="f-command" value="${esc(s.command)}" placeholder="npx">
+      <label class="f" for="f-args">arguments — separated by spaces; quote any that contain one</label>
+      <input type="text" id="f-args" value="${esc((s.args || []).join(' '))}" placeholder='-y &quot;@playwright/mcp@latest&quot;'>
+    </div>
+
+    <div id="row-http">
+      <label class="f" for="f-url">server URL</label>
+      <input type="text" id="f-url" value="${esc(s.url)}" placeholder="http://127.0.0.1:8761/mcp">
+    </div>
+
+    <label class="f" for="f-why">what it is for — this is what an agent reads to choose</label>
+    <textarea id="f-why" placeholder="Analyses a local image.">${esc(s.why)}</textarea>
+
+    <label class="f" for="f-notes">notes — one per line (traps, delays, prerequisites)</label>
+    <textarea id="f-notes" placeholder="The first call after an idle period reloads the engine: 20–30 s.">${esc((s.notes || []).join('\n'))}</textarea>
+
+    <div class="two">
+      <div>
+        <label class="f" for="f-needs">service to start on demand</label>
+        <select id="f-needs">
+          <option value="">— none —</option>
+          ${svcIds.map(id => `<option value="${esc(id)}"${s.needs_service === id ? ' selected' : ''}>${esc(id)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="f">targeting</label>
+        <label class="chk"><input type="radio" name="f-target" value="all"${all ? ' checked' : ''}> all clients</label>
+        <label class="chk"><input type="radio" name="f-target" value="some"${all ? '' : ' checked'}> only…</label>
+      </div>
+    </div>
+
+    <fieldset id="f-clients"${all ? ' hidden' : ''}>
+      <legend>clients that receive this server</legend>
+      ${state.plugins.map(p => `<label class="chk"><input type="checkbox" name="f-client" value="${esc(p.id)}"
+        ${(s.clients || []).includes(p.id) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
+    </fieldset>
+
+    <fieldset>
+      <legend>advanced</legend>
+      <label class="chk"><input type="checkbox" id="f-direct"${s.direct ? ' checked' : ''}>
+        write the upstream as-is — bypasses the manager (debugging)</label>
+      <label class="chk"><input type="checkbox" id="f-manager"${s.manager ? ' checked' : ''}>
+        this IS the manager itself</label>
+    </fieldset>
+
+    <div class="row">
+      <button class="act primary" id="save-server">Save</button>
+      <button class="act" id="cancel-server">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function renderServers() {
+  const names = Object.keys(state.servers).sort();
+  $('#tab-servers').innerHTML = `
+    <p class="hint">The source of truth. Clients receive a <em>translation</em> of this,
+       in their own format, through the matching plugin.
+       A server added here is reachable <strong>immediately</strong> at
+       <code>/mcp/&lt;name&gt;</code> — no restart.</p>
+    <div class="row" style="margin-bottom:18px">
+      <button class="act primary" id="new-server">+ New server</button>
+      <button class="act" id="reload-btn" title="re-read services.json and inventory.json from disk">Re-read files</button>
+    </div>
+    ${editing ? formHTML() : ''}
+    <div class="grid">${names.map(n => {
+      const s = state.servers[n];
+      const p = state.proxies?.[n];
+      const target = s.clients_explicit
+        ? (s.clients.length ? s.clients.join(', ') : 'no client')
+        : 'all clients';
+      const shape = s.transport === 'http' ? esc(s.url)
+        : esc([s.command, ...(s.args || [])].join(' '));
+      return `<div class="card">
+        <h3>${esc(n)}
+          ${s.manager ? '<span class="pill">the manager</span>' : ''}
+          ${s.direct ? '<span class="pill warn">direct</span>' : ''}
+          ${p ? (p.connected
+            ? `<span class="pill ok">upstream connected · ${p.tools.length} tool(s)</span>`
+            : `<span class="pill">${p.tools.length ? p.tools.length + ' tool(s) cached' : 'not seen yet'}</span>`) : ''}
+        </h3>
+        <div class="detail">${esc(s.transport)} · ${shape}</div>
+        <p class="why">${esc(s.why || '')}</p>
+        ${s.notes?.length ? `<ul class="notes">${s.notes.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        <div class="detail" style="margin-top:10px">targeted at: ${esc(target)}${s.needs_service ? ' · needs the ' + esc(s.needs_service) + ' service' : ''}</div>
+        ${p?.last_error ? `<div class="detail err">last error: ${esc(p.last_error)}</div>` : ''}
+        <div class="row">
+          <button class="act" data-edit="${esc(n)}">Edit</button>
+          ${n === 'system' ? '' : `<button class="act" data-del="${esc(n)}">Delete</button>`}
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+
+  // The stdio/http field: hide, do not rebuild — rebuilding would lose whatever
+  // has already been typed.
+  const syncTransport = () => {
+    const t = $('#f-transport').value;
+    $('#row-stdio').hidden = t !== 'stdio';
+    $('#row-http').hidden = t !== 'http';
+  };
+  const syncTarget = () => {
+    $('#f-clients').hidden = document.querySelector('input[name=f-target]:checked').value !== 'some';
+  };
+  if (editing) {
+    syncTransport(); syncTarget();
+    $('#f-transport').addEventListener('change', syncTransport);
+    document.querySelectorAll('input[name=f-target]').forEach(r => r.addEventListener('change', syncTarget));
+    $('#f-name').focus();
+  }
+}
+
+// --- Tabs -----------------------------------------------------------------
+// The hash carries the tab, so a section can be linked to directly (#clients)
+// from a bookmark, a shortcut, or to check the page.
+const TABS = ['services', 'clients', 'servers'];
+function showTab(t) {
+  if (!TABS.includes(t)) t = 'services';
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === t));
+  TABS.forEach(n => { $('#tab-' + n).hidden = (n !== t); });
+}
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
+  if (location.hash.slice(1) === b.dataset.tab) showTab(b.dataset.tab);
+  else location.hash = b.dataset.tab;
+}));
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+showTab(location.hash.slice(1));
+
+// --- Service actions (delegated) -------------------------------------------
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest('button[data-svc]');
+  if (!b) return;
+  b.disabled = true;
+  try {
+    const r = await api(`/api/service/${encodeURIComponent(b.dataset.svc)}/${b.dataset.verb}`, { method: 'POST' });
+    toast(r.message);
+    await load();
+  } catch (e) { toast(e.message, true); b.disabled = false; }
+});
+
+// --- Inventory actions (delegated) -----------------------------------------
+// Delegated because renderServers rebuilds its HTML on every refresh:
+// listeners attached to the buttons would be lost each time.
+
+// specFromApi: the object the server sends → the shape of the form.
+// Built field by field rather than copied wholesale: otherwise read-only fields
+// (clients_explicit) would travel back into the file.
+function specFromApi(name) {
+  const s = state.servers[name];
+  return {
+    transport: s.transport, command: s.command || '', args: s.args || [],
+    url: s.url || '', why: s.why || '', notes: s.notes || [],
+    needs_service: s.needs_service || '',
+    clients: s.clients_explicit ? (s.clients || []) : null,
+    manager: !!s.manager, direct: !!s.direct,
+  };
+}
+
+async function saveServer() {
+  const spec = {
+    transport: $('#f-transport').value,
+    command: $('#f-command').value.trim(),
+    args: splitArgs($('#f-args').value),
+    url: $('#f-url').value.trim(),
+    why: $('#f-why').value.trim(),
+    notes: $('#f-notes').value.split('\n').map(x => x.trim()).filter(Boolean),
+    needs_service: $('#f-needs').value,
+    clients: document.querySelector('input[name=f-target]:checked').value === 'some'
+      ? [...document.querySelectorAll('input[name=f-client]:checked')].map(x => x.value)
+      : null,
+    manager: $('#f-manager').checked,
+    direct: $('#f-direct').checked,
+  };
+  try {
+    const r = await api('/api/server', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: editing.key, name: $('#f-name').value.trim(), spec, delete: false })
+    });
+    editing = null;
+    dirty = true;           // the inventory moved: the clients do not know yet
+    toast(r.message);
+    await load();
+  } catch (e) { toast(e.message, true); }
+}
+
+document.addEventListener('click', async ev => {
+  if (ev.target.closest('#new-server')) {
+    editing = { key: '', spec: blankSpec() };
+    renderServers();
+    return;
+  }
+  const ed = ev.target.closest('button[data-edit]');
+  if (ed) {
+    const n = ed.dataset.edit;
+    editing = { key: n, spec: specFromApi(n) };
+    renderServers();
+    return;
+  }
+  const dl = ev.target.closest('button[data-del]');
+  if (dl) {
+    const n = dl.dataset.del;
+    if (!confirm(`Delete "${n}" from the inventory?\n\n` +
+                 `The client's file is NOT touched until you apply — ` +
+                 `but the words you wrote (why, notes) will be lost.`)) return;
+    try {
+      const r = await api('/api/server', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: n, delete: true })
+      });
+      if (editing?.key === n) editing = null;
+      dirty = true;
+      toast(r.message);
+      await load();
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
+  if (ev.target.closest('#cancel-server')) { editing = null; renderServers(); return; }
+  if (ev.target.closest('#save-server')) { await saveServer(); return; }
+  if (ev.target.closest('#reload-btn')) {
+    try {
+      const r = await api('/api/reload', { method: 'POST' });
+      toast(r.message);
+      await load();
+    } catch (e) { toast(e.message, true); }
+  }
+});
+
+window.addEventListener('beforeunload', ev => { if (dirty) ev.preventDefault(); });
+
+// The page refreshes itself, but ONLY when something actually changed.
+//
+// Two reasons, and the second is a real bug:
+//   1. Rebuilding the HTML every 5 s makes the page flicker for nothing.
+//   2. Above all: rebuilding REPLACES the buttons. A click landing during the
+//      swap does nothing at all — the button you pressed no longer exists.
+//      A button that answers every other time is worse than a slow one.
+//      (Found by actually clicking "New server".)
+//
+// So: compare the state just received with the previous one, and only touch the
+// DOM if it differs. While a form is open we leave the inventory alone anyway —
+// re-rendering it would erase what is being typed.
+let lastSig = '';
+
+async function refresh(force) {
+  const s = await api('/api/state');
+  const sig = JSON.stringify(s);
+  if (!force && sig === lastSig) return;
+  lastSig = sig;
+  state = s;
+  $('#paths').textContent = 'services: ' + state.config + '   ·   ' + state.inventory;
+  renderServices();
+  renderClients();
+  if (!editing) renderServers();
+}
+
+async function load() { await refresh(true); }
+
+load().catch(e => toast('could not load: ' + e.message, true));
+setInterval(() => refresh(false).catch(() => {}), 5000);
+</script>
+</body>
+</html>

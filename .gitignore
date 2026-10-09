@@ -1,0 +1,19 @@
+# Built binaries — rebuilt with `go build`, never committed.
+*.exe
+*.exe~
+
+# Runtime state. Everything here is derived and regenerated:
+#   cache/       the tool lists, refilled on the first call to each server
+#   manager.log  the tray has no console, so it writes here
+cache/
+manager.log
+
+# Timestamped backups the writer leaves NEXT TO the file it touched.
+# They usually land in your home directory, but catch any that land here.
+*.bak-*
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

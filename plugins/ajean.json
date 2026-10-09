@@ -1,0 +1,51 @@
+{
+  "$comment": [
+    "PLUGIN — how to translate the inventory into AJEAN's MCP servers.",
+    "",
+    "THE ONE CLIENT WITH NO CONFIG FILE. AJEAN keeps its MCP servers in a bbolt",
+    "database (bucket 'state', key 'mcp'), not in a JSON file — read from",
+    "E:\\Coding\\ajean\\internal\\ajean\\mcp_config.go on 2026-10-09. So there is",
+    "nothing to write on disk, and this plugin declares writer 'api' instead.",
+    "",
+    "Why not write the database directly: bbolt takes an EXCLUSIVE file lock, and",
+    "AJEAN is normally running. At best we would block; at worst we would corrupt",
+    "a store that also holds the user's keys and tokens. The API exists for this.",
+    "",
+    "THE SHAPE. Its /api/mcp/save takes ONE named server:",
+    "    {\"name\": …, \"command\": …, \"args\": […], \"env\": {…},",
+    "     \"url\": …, \"headers\": {…}, \"enabled\": true}",
+    "which is the same map our Render() produces, plus the name — so the whole",
+    "adapter is 'render, then add a name'. Transports are inferred from the",
+    "presence of 'command' or 'url': there is NO 'type' field, hence omit_type",
+    "covering both. We also never send 'enabled': its default when the key is",
+    "absent is already true, so leaving it out keeps its file clean.",
+    "",
+    "CONSEQUENCE OF AN API CLIENT, worth knowing before it surprises anyone:",
+    "AJEAN MUST BE RUNNING for an apply to reach it. A file client can be",
+    "configured while closed; this one cannot. The manager says so plainly rather",
+    "than failing obscurely.",
+    "",
+    "PORT: AJEAN's web server is `ajean web [port]`, default 8090. 0.0.0.0, but we",
+    "talk to it on loopback. Its /api/* is guarded by a 'web key' (Bearer) only if",
+    "one is set; none is set today, so api_auth_header is left empty."
+  ],
+  "id": "ajean",
+  "label": "AJEAN",
+  "writer": "api",
+  "api_base": "http://127.0.0.1:8090",
+  "api_list_path": "/api/mcp",
+  "api_list_array": "servers",
+  "api_name_field": "name",
+  "api_save_path": "/api/mcp/save",
+  "api_delete_path": "/api/mcp/delete",
+  "type_map": {
+    "http": "http"
+  },
+  "omit_type": [
+    "stdio",
+    "http"
+  ],
+  "command_shape": "string_args",
+  "http_key": "url",
+  "proxy_base": "http://127.0.0.1:8787/mcp"
+}

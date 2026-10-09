@@ -1,0 +1,36 @@
+{
+  "$comment": [
+    "PLUGIN — how to translate the inventory into opencode's config.",
+    "",
+    "TRAP, measured 2026-10-09: opencode reads TWO files and merges them.",
+    "    ~/.config/opencode/opencode.json   written by OpenChamber — it rewrites it",
+    "    ~/.config/opencode/limits.json     this one, referenced by OPENCODE_CONFIG",
+    "A server removed from limits.json SURVIVES if it is also in opencode.json.",
+    "So we write to limits.json, the only one of the two that OpenChamber does not own.",
+    "",
+    "TRAP 2: the Host header. The previous hub is gone, so this is moot here — but if an",
+    "HTTP server ever refuses a non-loopback Host, its plugin will need a dedicated field.",
+    "",
+    "command_prefix ['cmd', '/c']: on Windows, opencode is a Node process, and Node",
+    "cannot exec 'npx' (a .cmd) without going through a shell. Its working config",
+    "did use 'cmd /c npx …'.",
+    "",
+    "Trap 3: the root key is 'mcp', NOT 'mcpServers', and the type is spelled",
+    "'local'/'remote' rather than 'stdio'/'http'."
+  ],
+  "id": "opencode",
+  "label": "opencode",
+  "config_path": "~\\.config\\opencode\\limits.json",
+  "root_key": "mcp",
+  "type_map": {
+    "stdio": "local",
+    "http": "remote"
+  },
+  "command_shape": "array",
+  "command_prefix": [
+    "cmd",
+    "/c"
+  ],
+  "http_key": "url",
+  "proxy_base": "http://127.0.0.1:8787/mcp"
+}

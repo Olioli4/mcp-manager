@@ -1,0 +1,30 @@
+{
+  "$comment": [
+    "PLUGIN — describes how to translate an inventory server into ONE client's config.",
+    "",
+    "A plugin is a declarative file: the main program knows how to RENDER, the plugin",
+    "says WHAT to render and WHERE. Adding a client (Cline, Zed, …) = copying this file",
+    "and adapting the fields — no recompilation.",
+    "",
+    "Fields:",
+    "  id            plugin identifier (the filename without .json)",
+    "  label         human-readable client name",
+    "  config_path   where the client keeps its config (absolute, or ~ for the user profile)",
+    "  root_key      the root key holding the list of servers",
+    "  type_map      our transport -> the client's vocabulary for 'type'",
+    "  command_shape \"string_args\" (command = string + args[]) | \"array\" (command = array)",
+    "  http_key      the key carrying the URL for an http server (almost always \"url\")",
+    "  proxy_base    if set, the client talks to the manager instead of the upstreams"
+  ],
+  "id": "claude-code",
+  "label": "Claude Code",
+  "config_path": "~\\.claude.json",
+  "root_key": "mcpServers",
+  "type_map": {
+    "stdio": "stdio",
+    "http": "http"
+  },
+  "command_shape": "string_args",
+  "http_key": "url",
+  "proxy_base": "http://127.0.0.1:8787/mcp"
+}
