@@ -631,7 +631,18 @@ func handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	var buf strings.Builder
 	if err := applyTo(&buf, inv, req.Write); err != nil {
-		writeErr(w, 500, err)
+		// An apply is NOT atomic across clients: they are written in order, and
+		// an API client is deleted from and saved to one call at a time. By the
+		// time one fails, the earlier ones have already changed. Returning only
+		// the error would hide that — the user would be told "HTTP 500" about a
+		// half-applied configuration. So the report goes with the error.
+		logf("web apply (write=%v): ÉCHEC — %v", req.Write, err)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":  err.Error(),
+			"report": buf.String(),
+		})
 		return
 	}
 	logf("web apply (write=%v)", req.Write)

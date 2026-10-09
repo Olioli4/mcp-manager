@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -332,19 +333,53 @@ func applyDir() string {
 	return "plugins"
 }
 
-// readDoc reads a JSON file into a generic object. A missing file returns an
-// empty document (the client simply does not have a config yet).
-func readDoc(path string) (map[string]any, error) {
+// readDoc reads a JSON file, keeping EVERY top-level value as its original
+// bytes.
+//
+// Why raw bytes and not a decoded map — this is the difference between a safe
+// writer and a destructive one. Decoding into map[string]any turns every JSON
+// number into a float64, so re-writing the file silently corrupts whatever we
+// did not touch: 18446744073709551615 comes back as 18446744073709552000, and
+// a non-UTF-8 byte comes back as U+FFFD — reported as success. Files like
+// ~/.claude.json hold 62 top-level keys we have no business re-encoding.
+//
+// Everything except the one key we replace therefore survives byte-for-byte.
+//
+// A file that is missing, empty, whitespace-only, BOM-prefixed or `null` is
+// treated as an empty document rather than an error. Each of those is a real
+// case on Windows (Notepad and PowerShell 5.1 write BOMs), and refusing them
+// would abort the whole apply for every other client too.
+func readDoc(path string) (map[string]json.RawMessage, error) {
+	empty := func() map[string]json.RawMessage { return map[string]json.RawMessage{} }
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]any{}, nil
+			return empty(), nil
 		}
 		return nil, err
 	}
-	var doc map[string]any
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+
+	trimmed := bytes.TrimSpace(raw)
+	// An explicit `null` check: Go's decoder IGNORES a JSON null for a map
+	// value, so without this the document would silently stay empty — correct,
+	// but it would also skip the "not an object" rejection below, and a file
+	// containing nothing but `null` deserves to be read as "no config yet".
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return empty(), nil
+	}
+
+	doc := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("existing config unreadable (%s): %w", path, err)
+	}
+	// Defensive, and currently unreachable: the explicit `null` check above
+	// already catches the only input that decodes to a nil map without an
+	// error. Kept because the cost is one comparison and the failure it guards
+	// is a panic inside a background service.
+	if doc == nil {
+		doc = empty()
 	}
 	return doc, nil
 }
@@ -360,15 +395,25 @@ func serverNames(v any) []string {
 	return names
 }
 
+// blockFor decodes the value stored under a root key, for COMPARISON only.
+// Decoding here is safe: it decides whether to write, never what to write.
+func blockFor(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
 // diffBlock compares a client's current block with the block we want to write.
 // It returns three lists: added, changed, removed. This is what makes visible
 // the fact that we REPLACE the block — therefore that what is not in the
 // inventory disappears.
-//
-// cur is typed any because it comes from an indexed map[string]any
-// (doc[root_key]): the content of an untyped JSON is always any before assertion.
-func diffBlock(cur any, want map[string]any) (added, changed, removed []string) {
-	curM, _ := cur.(map[string]any)
+func diffBlock(cur json.RawMessage, want map[string]any) (added, changed, removed []string) {
+	curM := blockFor(cur)
 	for n, w := range want {
 		c, ok := curM[n]
 		if !ok {
@@ -409,17 +454,64 @@ func marshalDoc(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// writeDoc backs up the existing file then writes the document.
+// backupPath names a backup next to the file it copies.
+//
+// Milliseconds AND four random hex digits: the previous version had
+// second resolution, so two applies in the same second produced the same name
+// and the second silently overwrote the first — losing the state from before
+// the first one.
+func backupPath(path string) string {
+	return fmt.Sprintf("%s.bak-%s-%04x", path, time.Now().Format("20060102-150405.000"), rand.Intn(0x10000))
+}
+
+// writeFileAtomic writes data to path without ever leaving a half-written file
+// THERE.
+//
+// os.WriteFile truncates in place, so a crash, a full disk or a killed process
+// mid-write leaves the file destroyed — and for a config file the user's whole
+// client goes with it. Instead: write a temporary file in the SAME directory
+// (so the rename cannot cross a filesystem), flush it, then replace the target
+// in one step.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // a no-op once the rename has succeeded
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// writeDoc backs up the existing file, then writes the document atomically.
 // The backup is timestamped and placed NEXT TO the file, never elsewhere.
-func writeDoc(path string, doc map[string]any) (string, error) {
+// The file's own permissions are preserved: we are a guest in it.
+func writeDoc(path string, doc map[string]json.RawMessage) (string, error) {
+	perm := os.FileMode(0o644)
 	backup := ""
-	if _, err := os.Stat(path); err == nil {
+	if st, err := os.Stat(path); err == nil {
+		perm = st.Mode().Perm()
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return "", err
 		}
-		backup = fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
-		if err := os.WriteFile(backup, raw, 0o644); err != nil {
+		backup = backupPath(path)
+		if err := os.WriteFile(backup, raw, perm); err != nil {
 			return "", fmt.Errorf("backup impossible (%s): %w", backup, err)
 		}
 	}
@@ -427,10 +519,21 @@ func writeDoc(path string, doc map[string]any) (string, error) {
 	if err != nil {
 		return backup, err
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
+	if err := writeFileAtomic(path, out, perm); err != nil {
 		return backup, err
 	}
 	return backup, nil
+}
+
+// setBlock stores the rendered servers under the client's root key, leaving
+// every other top-level value exactly as it was read.
+func setBlock(doc map[string]json.RawMessage, key string, want map[string]any) error {
+	enc, err := marshalDoc(want)
+	if err != nil {
+		return err
+	}
+	doc[key] = json.RawMessage(enc)
+	return nil
 }
 
 // pluginIDs returns the plugins' ids, sorted — for the error messages.
@@ -532,7 +635,19 @@ func applyTo(w io.Writer, inv *Inventory, write bool) error {
 			continue
 		}
 
-		doc[p.RootKey] = want
+		// Nothing to change: do NOT rewrite.
+		//
+		// The old version wrote the file anyway, so every no-op apply still
+		// re-encoded a document we do not own and left a backup to prove it.
+		// An apply that changes nothing must touch nothing.
+		if len(added)+len(changed)+len(removed) == 0 {
+			fmt.Fprintf(w, "\n  nothing written — the file already matches.\n\n")
+			continue
+		}
+
+		if err := setBlock(doc, p.RootKey, want); err != nil {
+			return err
+		}
 		backup, err := writeDoc(path, doc)
 		if err != nil {
 			return err

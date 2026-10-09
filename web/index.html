@@ -117,7 +117,13 @@ function toast(msg, isErr) {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  if (!r.ok) {
+    // Carry the whole body on the error: a failed apply sends back a report of
+    // what it already changed, and the caller needs it.
+    const err = new Error(j.error || ('HTTP ' + r.status));
+    err.report = j.report;
+    throw err;
+  }
   return j;
 }
 
@@ -202,7 +208,13 @@ async function doApply(write) {
     });
     out.textContent = r.report;
     if (write) { dirty = false; $('#dirty-hint').textContent = ''; toast('Applied — backups created.'); }
-  } catch (e) { out.textContent = 'error: ' + e.message; toast(e.message, true); }
+  } catch (e) {
+    // An apply that fails part-way has ALREADY changed the earlier clients.
+    // The server sends back what it managed to do; showing only the error would
+    // leave the user believing nothing happened.
+    out.textContent = 'error: ' + e.message + (e.report ? '\n\n--- what happened before the failure ---\n' + e.report : '');
+    toast(e.message, true);
+  }
 }
 
 // --- Inventory (editable) --------------------------------------------------

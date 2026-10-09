@@ -175,6 +175,38 @@ PLAN.md           this file
   - Swept the whole tree for French a second time, this time for accent-free French as well — the
     first pass only caught accented characters, and `"Chrome (port de debug)"` was sitting in a
     README sample the whole time.
+- [x] **Adversarial audit** — `AUDIT.md`. Two independent reviewers under an adversarial brief
+  (correctness/data-safety, and UI/usability) plus my own probing of the running system. Every
+  load-bearing finding was re-verified by hand rather than relayed.
+  - **The critical one was mine, and it was live:** a cross-origin POST reached `/api/server`
+    because the server checked neither `Origin` nor `Host`, and parsed the body as JSON whatever
+    the Content-Type — so a bare HTML `<form>` sufficed, no JavaScript needed. Replacing an
+    inventory server with `cmd /c …` then executed it, because **the cached tool list for that
+    name survives**, so the proxy still advertised tools and connecting upstream ran the command.
+    Fixed in `2c04a38`; the replay is now 403 and produces no marker file.
+- [x] **The writer, repaired.** Four findings, all in the same few functions:
+  - **It re-encoded files it does not own.** `readDoc` decoded the whole document into
+    `map[string]any`, so every JSON number became a `float64` and re-writing corrupted whatever we
+    had not touched — `18446744073709551615` came back as `18446744073709552000`, a non-UTF-8 byte
+    as U+FFFD, both reported as success. It now holds every top-level value as **raw bytes** and
+    replaces only its own root key. (Measured before the fix: none of the three live configs would
+    have changed *today* — the mechanism was armed, not firing.)
+  - **A `null` config file panicked the app** — `assignment to entry in nil map`, from an HTTP
+    handler and from the CLI.
+  - **A partial apply threw away its own report.** Clients are written in order, so by the time one
+    fails the earlier ones have already changed; the user was told only `HTTP 500`. The report now
+    travels with the error and the UI displays it.
+  - **Empty, whitespace and BOM files aborted the entire apply** — one bad client blocking all the
+    others. The BOM case is the Windows one: Notepad and PowerShell 5.1 write them.
+  - Plus: **atomic writes** (temp + `fsync` + rename, original permissions preserved — the old
+    `os.WriteFile` truncated in place), **collision-proof backup names**, and a **no-op apply now
+    touches nothing** (verified on the real files: mtimes unchanged, no new backup).
+- [x] **The project has tests.** `apply_test.go`, each test named after the failure it prevents.
+  Every one was **mutation-tested** — protection removed, test confirmed to fail, restored. That
+  exercise found that my first permission test had no teeth on Windows (`os.Chmod` only toggles the
+  read-only attribute, and Go reports any writable file as 0666), so it was replaced with the
+  invariant Windows actually has: a file we may not write must fail, stay intact, and leave no
+  litter.
 - [x] **W1+W2 — local web UI.** `web.go` serves an embedded page (`web/index.html`, `go:embed`) on
   `127.0.0.1:8787` — loopback only, nothing on the network. No framework, no build step: one binary.
   Tray item **"Open the configuration…"** opens it.

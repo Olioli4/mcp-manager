@@ -14,6 +14,31 @@ was started or stopped, and the real config files were never written to during t
 
 ---
 
+## Status after repair
+
+Fixed since this report was written. The findings below are kept as they were
+found, with their evidence, because the reasoning is what stops them coming back.
+
+| Finding | State |
+|---|---|
+| CRITICAL cross-origin → code execution | **fixed** `2c04a38`, replay now 403 |
+| HIGH whole-file lossy round-trip | **fixed** — every untouched key is now held and written as raw bytes |
+| HIGH panic on a `null` config file | **fixed** — two independent protections; test proven by mutation |
+| HIGH partial apply discards its report | **fixed** — the report travels with the error, and the UI shows it |
+| LOW-1 empty/whitespace/BOM aborts the whole apply | **fixed** — all read as "no config yet" |
+| LOW-2 rewrites the file when already up to date | **fixed** — a no-op apply now touches nothing (verified: mtimes unchanged) |
+| MEDIUM-4 no atomic write | **fixed** — temp file + fsync + rename, permissions preserved |
+| MEDIUM-2 backup names collide | **fixed** — milliseconds plus random suffix |
+| HIGH Apply has no confirmation | open — design agreed (render the diff, second click), not yet built |
+| HIGH matrix unusable at narrow widths | open |
+| MEDIUM-1 systray data race · MEDIUM-3 PowerShell interpolation · LOW-3…LOW-7 | open |
+
+The project now has tests (`apply_test.go`), each named after the failure it
+prevents. Every one was mutated — the protection removed, the test confirmed to
+fail, then restored — because a test that cannot fail is worse than no test.
+
+---
+
 ## CRITICAL — cross-origin request → code execution  ·  FIXED
 
 **Found by me, by hand. Exploited end to end before the fix.**
