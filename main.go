@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -118,13 +119,25 @@ func loadEngine() (*Engine, error) {
 // seedFromExample copies <name>.example.json to <name>. It returns the example's
 // filename, or "" when there was nothing to copy — in which case the caller
 // carries on and reports the real error.
+//
+// The copy lands NEXT TO THE EXAMPLE WE ACTUALLY READ, never in the working
+// directory (M7): assetPath resolves the exe's own folder first, so a shortcut
+// or Task-Scheduler launch (CWD = System32) seeds services.json/inventory.json
+// beside the executable, where the README says they go and where cache/ and the
+// log already live. Writing into the CWD seeded configs into whatever folder the
+// launcher happened to set — and the next launch, with a different CWD, found
+// neither and seeded again. In development (go run), where assetPath falls back
+// to the relative path, the example is read from and written to the repository
+// folder: seeding stays where the developer expects it.
 func seedFromExample(name string) string {
 	ex := strings.TrimSuffix(name, ".json") + ".example.json"
-	src, err := os.ReadFile(assetPath(ex))
+	srcPath := assetPath(ex)
+	src, err := os.ReadFile(srcPath)
 	if err != nil {
 		return ""
 	}
-	if err := os.WriteFile(assetPath(name), src, 0o644); err != nil {
+	target := filepath.Join(filepath.Dir(srcPath), name)
+	if err := os.WriteFile(target, src, 0o644); err != nil {
 		return ""
 	}
 	return ex
