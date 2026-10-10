@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,5 +162,67 @@ func TestValidateServerSpecRejectsBrokenEnvHeaders(t *testing.T) {
 	}
 	if err := validateServerSpec("s", good, e, plugins); err != nil {
 		t.Errorf("the valid pair was refused: %v", err)
+	}
+}
+
+// Renaming a server ONTO a name that already exists used to delete the old
+// key and then write over the server that held that name — the third
+// server's whole configuration erased, reported as "renamed", a success.
+// The refusal must say both names, and NOTHING may change on a refusal:
+// not alpha, not beta, not even the $comment block.
+func TestRenameOntoExistingNameIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inventory.json")
+	doc := `{
+  "$comment": {"what": "the format block must survive every write"},
+  "servers": {
+    "alpha": {"transport": "http", "url": "http://127.0.0.1:1/mcp"},
+    "beta":  {"transport": "stdio", "command": "keepme.exe"}
+  }
+}`
+	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	e := &Engine{}
+	e.SetManifest(&Manifest{Settings: Settings{PollSeconds: 5}})
+
+	body := `{"key": "alpha", "name": "beta", "spec": {"transport": "http", "url": "http://127.0.0.1:2/mcp"}}`
+	req := httptest.NewRequest("POST", "/api/server", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handleServer(rec, req, e)
+
+	if rec.Code != 409 {
+		t.Fatalf("renaming onto an existing name answered %d (%s); want 409 refusal", rec.Code, rec.Body.String())
+	}
+	if msg := rec.Body.String(); !strings.Contains(msg, "alpha") || !strings.Contains(msg, "beta") {
+		t.Errorf("the refusal must name both servers, got: %s", msg)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("the inventory is not valid JSON after the refusal: %v\n%s", err, raw)
+	}
+	if _, ok := got["$comment"]; !ok {
+		t.Fatal("the $comment block did not survive the refused write")
+	}
+	servers, ok := got["servers"].(map[string]any)
+	if !ok {
+		t.Fatalf("'servers' lost: %v", got["servers"])
+	}
+	if _, ok := servers["alpha"]; !ok {
+		t.Fatal("the refused rename deleted 'alpha' — a refusal must change nothing")
+	}
+	beta, _ := servers["beta"].(map[string]any)
+	if beta["command"] != "keepme.exe" {
+		t.Fatalf("'beta' was overwritten by the refused rename: %v", servers["beta"])
 	}
 }

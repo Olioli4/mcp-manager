@@ -30,12 +30,37 @@ found, with their evidence, because the reasoning is what stops them coming back
 | MEDIUM-4 no atomic write | **fixed** — temp file + fsync + rename, permissions preserved |
 | MEDIUM-2 backup names collide | **fixed** — milliseconds plus random suffix |
 | HIGH Apply has no confirmation | **fixed** — the first click shows the diff and arms the button; only a second click writes |
-| HIGH matrix unusable at narrow widths | open |
-| MEDIUM-1 systray data race · MEDIUM-3 PowerShell interpolation · LOW-3…LOW-7 | open |
+| HIGH matrix unusable at narrow widths | **fixed** — Phase 3.1 (`ae669b2`): rebuilt as CSS Grid, sticky name column, stacking below 640 px; verified live at 380 px and 1280 px |
+| MEDIUM-5 blank page on load failure · MEDIUM-6 unreadable errors | **fixed** — Phase 3.3 (`49454bd`): persistent panel in `<main>` with endpoint, reason, Retry; survives the failing polls; `#report` is `aria-live` and never auto-dismisses |
+| LOW-3 silent death from a bad `services.json` | **fixed** — `fatalDialog` shows the parse failure in a modal box (`-windowsgui` has no console) |
+| LOW-4 `CloseAll()` never called · orphaned children on quit | **fixed** — tray `onExit` calls `CloseAll()`, and the Job Object (KILL_ON_JOB_CLOSE) makes the kernel kill every child when the manager dies |
+| LOW-6 zero ARIA · LOW-7 form not a `<form>` | **fixed** — Phase 3.2 (`6a1c49c`): live regions, labelled status dots that survive forced-colours, real `<form>` so Enter saves, visible focus ring |
+| rename onto an existing name overwrote a third server | **fixed** — Phase 4: refused with 409 naming both servers; test proven by mutation |
+| `probeProcess` panicked on a short tasklist row | **fixed** — Phase 4: `presentMsg` formats only what exists, `"pid ?"` for what it cannot know; test proven by mutation |
+| tray label cut split UTF-8 characters · `time.Tick` ignored poll reload | **fixed** — Phase 4: rune-boundary `truncate`; ticker re-reads `poll_seconds` every tick (`tray_test.go`, mutation-proven) |
+| MEDIUM-1 systray data race · MEDIUM-3 PowerShell interpolation · LOW-5 log rotation | **deferred — known, not fixed** (see below) |
 
 The project now has tests (`apply_test.go`), each named after the failure it
 prevents. Every one was mutated — the protection removed, the test confirmed to
 fail, then restored — because a test that cannot fail is worse than no test.
+
+---
+
+## Deferred — known, not fixed
+
+Deliberate scope decisions, recorded so they are not rediscovered as mysteries.
+Each is real; none blocks v0.1.0.
+
+| Finding | Why deferred |
+|---|---|
+| **Symlink resolution before atomic replace** — a temp-file rename replaces the *link*, not the target, if the config path is a symlink (`filepath.EvalSymlinks` would resolve it first) | Windows refused to create a test symlink during the audit; unverifiable behaviour on the dev machine. Config targets here are plain files. |
+| **Backup rotation** — every apply writes a `.bak`, they accumulate, nothing prunes them | Disk cost is tiny, and deleting someone's backups by policy is worse than extra files. |
+| **Preview-diff hash** — Apply re-computes the diff at write time; a file changed between Preview and Apply gets *the new* content written without you having reviewed it | Needs a content hash carried through the two-click flow; the second click already forces a human in the loop for the common case. |
+| **`forward` has no call timeout of its own** — an MCP request blocks for as long as the caller's context lives (stdio upstream that never answers) | The proxy inherits the client's context; inventing our own timeout would kill slow legitimate calls (an `npx` cold start can take a minute). Clients set their own timeouts. |
+| **`DETACHED_PROCESS` finding** — it silently kills console-app launches; every launch flag set is `CREATE_NO_WINDOW` + `HideWindow`, verified against real programs | Discovered and already applied everywhere; recorded because the natural first guess (DETACHED) looks right and is wrong. |
+| **MEDIUM-1 systray data race** — poll goroutine and click goroutines call `SetTitle`/`Enable`/`Disable` with no lock (systray v1.2.2 has none) | A fix means serialising every tray mutation through one goroutine; the race is on label fields only, its observed cost is a garbled menu line, not a crash path. Carried forward. |
+| **MEDIUM-3 PowerShell interpolation in `killProcess`/`countProcesses`** — manifest values are spliced into a script string | Local-config trust: whoever can edit `services.json` can already run anything the manager runs. A silently broken stop is the realistic harm; it is loud in the log. Carried forward. |
+| **LOW-5 no log rotation** — `mcp-manager.log` grows unbounded | One line per action at human pace; gigabytes are years away. Carried forward. |
 
 ---
 

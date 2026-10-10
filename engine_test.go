@@ -259,3 +259,18 @@ func TestStartLaunchesAServiceOnlyOnce(t *testing.T) {
 		t.Fatalf("neither caller saw the service as already running:\n%s", joined)
 	}
 }
+
+// probeProcess reads row[1] — the pid column of tasklist's CSV — straight
+// from the parsed row. A malformed row (a truncation, a locale surprise)
+// panicked on the index and killed the whole tray. The formatting step
+// must survive a short row: no panic, and "pid ?" says what is unknown.
+func TestPresentMsgSurvivesShortTasklistRows(t *testing.T) {
+	full := presentMsg("Docker Desktop", []string{"Docker Desktop.exe", "4242"})
+	if !strings.Contains(full, "pid 4242") {
+		t.Errorf("a complete row must report the pid, got: %s", full)
+	}
+	short := presentMsg("Docker Desktop", []string{"Docker Desktop.exe"})
+	if !strings.Contains(short, "pid ?") {
+		t.Errorf("a row without a pid column must say 'pid ?', got: %s", short)
+	}
+}

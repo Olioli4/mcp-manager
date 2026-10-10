@@ -466,6 +466,14 @@ func handleServer(w http.ResponseWriter, r *http.Request, e *Engine) {
 				writeErr(w, 404, fmt.Errorf("server to rename unknown: %q", key))
 				return
 			}
+			// Renaming ONTO an existing name used to overwrite that server in
+			// silence: two edits in the form, and a third server's words were
+			// gone. Refuse with both names instead — nothing is ever lost
+			// without saying so.
+			if _, taken := servers[name]; taken {
+				writeErr(w, 409, fmt.Errorf("cannot rename %q: a server named %q already exists — delete it first, or choose another name", key, name))
+				return
+			}
 			delete(servers, key)
 			msg = fmt.Sprintf("server %q renamed to %q", key, name)
 		} else if key == "" {

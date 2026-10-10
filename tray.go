@@ -118,11 +118,33 @@ func trayReady(e *Engine) {
 
 	// Periodic refresh: the state can change without us (the user closes a
 	// window, a program crashes).
+	//
+	// The interval is RE-READ every tick, not fixed at startup: "Re-read
+	// files" can change poll_seconds in services.json, and time.Tick — once
+	// taken — never changes its mind. A ticker that ignores the manifest
+	// would keep the old rhythm for the rest of the day.
 	go func() {
-		for range time.Tick(time.Duration(e.Manifest().Settings.PollSeconds) * time.Second) {
+		interval := pollInterval(e)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for range t.C {
 			refreshAll(e, menus)
+			if next := pollInterval(e); next != interval {
+				interval = next
+				t.Reset(next)
+			}
 		}
 	}()
+}
+
+// pollInterval reads the current poll_seconds from the live manifest;
+// non-sensical values fall back to 5 s, same as the manifest defaults.
+func pollInterval(e *Engine) time.Duration {
+	s := e.Manifest().Settings.PollSeconds
+	if s <= 0 {
+		s = 5
+	}
+	return time.Duration(s) * time.Second
 }
 
 // doAction runs start/stop and writes the result to the log — a tray has no
@@ -168,11 +190,15 @@ func refreshAll(e *Engine, menus map[string]*svcMenu) {
 	systray.SetTooltip(fmt.Sprintf("MCP Manager — %d/%d services running", up, len(man.Services)))
 }
 
+// truncate cuts a string to n RUNES for a tray label. Counting bytes could
+// split a UTF-8 character (an em dash is three) and put broken text — or a
+// replacement glyph — at the end of the menu line.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
 
 // ---------------------------------------------------------------------------

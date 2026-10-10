@@ -225,10 +225,21 @@ func probeProcess(name string) (bool, string) {
 	}
 	for _, row := range csvRows(out) {
 		if len(row) > 0 && strings.EqualFold(strings.TrimSpace(row[0]), procName(name)) {
-			return true, fmt.Sprintf("process %s present (pid %s)", name, row[1])
+			return true, presentMsg(name, row)
 		}
 	}
 	return false, fmt.Sprintf("no process %s", name)
+}
+
+// presentMsg formats the running answer from a tasklist CSV row. A malformed
+// row (shorter than "name,pid" — a truncation, a locale surprise) must not
+// panic: index 1 is only read when it exists, and "?" says what is unknown.
+func presentMsg(name string, row []string) string {
+	pid := "?"
+	if len(row) > 1 {
+		pid = strings.TrimSpace(row[1])
+	}
+	return fmt.Sprintf("process %s present (pid %s)", name, pid)
 }
 
 // ---------------------------------------------------------------------------
