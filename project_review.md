@@ -81,6 +81,8 @@ So a server added from the UI, with no `cache/<name>.tools.json` yet, offers **z
 - `truncate()` cuts by bytes and can split a UTF-8 character in the tray menu.
 - `time.Tick` reads `PollSeconds` once, so a reload doesn't change the poll rate.
 - `.github/workflows/test.yml` is **not committed** (it shows as `??` in git status).
+  *(Verified 2026-10-10: the file is tracked and committed — this line was stale when the review
+  ran; do not trust it.)*
 - **Possible doc inaccuracy:** the claim that "AJEAN drives us from its page on :8090". The server sends no CORS headers, so a cross-origin `fetch` from :8090 can't read our responses, and a JSON POST triggers a preflight that gets a 405. This only works if AJEAN calls us server-side.
 
 ---

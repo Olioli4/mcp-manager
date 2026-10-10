@@ -143,9 +143,14 @@ func loopbackHost(h string) bool {
 // /mcp/<name> executed the planted command. Arbitrary code execution from any
 // page the user visited.
 //
-// Loopback origins are allowed on ANY port, not just ours: AJEAN drives us from
-// its own web UI on :8090. That is safe — a page cannot forge the Origin header
-// — and it keeps a local app able to talk to us.
+// Loopback origins are allowed on ANY port, not just ours: a local web app
+// driving this manager from its own page (a UI running on :8090) must pass this
+// check, and that is safe — a page cannot forge the Origin header.
+// The AJEAN integration itself is OUTBOUND: `apply` writes into AJEAN's API
+// server-side (writer "api" in plugins/ajean.json), which this check does not
+// govern. The manager sends no CORS headers, so a browser fetch from another
+// page could not read our responses anyway; the allowance is room for local
+// apps, permission and not invitation.
 func localOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host

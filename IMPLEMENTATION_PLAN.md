@@ -54,20 +54,19 @@ checkout, and never let your editor rewrite `*.go` to CRLF.
 
 ---
 
-## 1 · Read this first — the fixes are already half-done, in a local unpushed commit
+## 1 · Read this first — history: an earlier agent had the fixes half-done
 
-An earlier agent already implemented part of the review and committed it as **`c8bb887` "Fix proxy
-lifecycle, flaky backup test, and modernize Web UI"**. That commit is **local and not pushed**
-(`git status` says *ahead of origin/main by 1 commit*). It touches `apply.go`, `proxy.go` and
-`web/index.html`. The tree compiles and `go test` passes, but:
+An earlier agent implemented part of the review and committed it as **`c8bb887` "Fix proxy
+lifecycle, flaky backup test, and modernize Web UI"**. When this plan was written, that commit was
+local and unpushed; it touched `apply.go`, `proxy.go` and `web/index.html`, and carried three
+caveats: no tests of its own for the proxy changes, a Google-font `@import` in the UI, and an H1
+backup naming fix that was a 32-bit lottery.
 
-- the proxy changes have **no tests of their own** and have not been race-checked;
-- the UI change introduces a network dependency (see Phase 0.2);
-- the H1 fix is a 32-bit lottery, not the deterministic fix (see Phase 0.3).
-
-Do **Phase 0** before touching anything else. The commit is a good starting point, not garbage —
-keep it and build on it; do not revert it. Push it when you are done reviewing it (it has been
-sitting unpushed).
+**Status 2026-10-10: pushed, reviewed, and built upon — all three caveats are closed.** Phase 0
+replaced the proxy lifecycle with publish-and-borrow in one critical section under tests
+(`proxy_test.go`, `-race` clean), removed the font `@import`, and made the backup names
+`O_CREATE|O_EXCL` + retry. The history from `c8bb887` forward is the base; keep it, do not revert
+it.
 
 ---
 
@@ -83,8 +82,8 @@ sitting unpushed).
 
 ## Phase 0 — verify and tighten the already-committed fixes
 
-The four review findings below are already implemented in `c8bb887` (local, unpushed). Treat them as
-a draft you must verify, not as done:
+The four review findings below were already implemented in `c8bb887` (since pushed; see §1). They
+were a draft verified by Phase 0, not done work:
 
 - **H2** idle timer cut off in-flight calls → now an `inFlight` counter + `enter()`/`leave()`.
 - **H3** nil-session deref in `forward` → `enter()` returns the session under the lock, `forward`

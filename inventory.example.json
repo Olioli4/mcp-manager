@@ -23,12 +23,15 @@
     "                  ${NAME} from its own environment at the moment of use, and refuses the",
     "                  launch/request with the variable's NAME when it is not set.",
     "  clients         list of plugin ids that receive this server.",
-    "                  ABSENT or empty = ALL clients (a deliberate default: a client added",
+    "                  ABSENT = ALL clients (a deliberate default: a client added",
     "                  tomorrow inherits everything, and you restrict it afterwards if needed).",
-    "                  An unknown id is REFUSED at startup, not silently ignored.",
+    "                  An empty list [] = NONE — it is a real value, not a way of writing 'all'.",
+    "                  An unknown id is refused at save/apply, not silently ignored.",
     "",
     "SECRETS RULE: NEVER put a key or a token here. Reference an environment variable",
-    "name instead; the client will receive {\"env\": {\"NAME\": \"${NAME}\"}}."
+    "name inside an env/headers value — \"OPENAI_API_KEY\": \"${OPENAI_API_KEY}\". The manager",
+    "expands ${NAME} from its own environment at the moment of use and refuses with the",
+    "variable's NAME when it is not set; the secret itself lands in no config file."
   ],
   "servers": {
     "system": {

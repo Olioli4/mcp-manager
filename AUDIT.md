@@ -73,8 +73,16 @@ The same request could also `POST /api/apply {write:true}` and rewrite all four 
 files, or start arbitrary declared programs on the desktop.
 
 **Fixed** in `2c04a38`: `localOnly` wraps the whole mux. Host must be loopback; `Origin`, if
-present, must be loopback. Loopback origins are accepted on *any* port, because AJEAN drives us
-from its own page on `:8090` — safe, since a page cannot forge the `Origin` header.
+present, must be loopback. Loopback origins are accepted on *any* port, so that a local web app can
+drive the manager from its own page — safe, since a page cannot forge the `Origin` header.
+
+*Correction (2026-10-10):* this paragraph claimed "AJEAN drives us from its own page on `:8090`".
+The direction is the other way in the code that exists today: the manager calls **out** to AJEAN's
+HTTP API (the `api` writer, `plugins/ajean.json`), and that outbound call is not governed by this
+Origin check at all. A browser page on `:8090` driving *us* would in fact fail: the manager sends no
+CORS headers, so a cross-origin `fetch` cannot read the responses, and a JSON POST is preflighted
+and refused. The loopback-Origin allowance stays — it is harmless room for local apps — but it is
+permission, not an integrated path.
 
 Verified: all four vectors 403, the replay produces no marker, and the five legitimate paths still
 return 200 (UI over `127.0.0.1` and `localhost`, plain API, loopback Origin, MCP client with no
