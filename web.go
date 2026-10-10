@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 //go:embed web/index.html
@@ -365,6 +366,18 @@ func handleToggle(w http.ResponseWriter, r *http.Request, e *Engine) {
 // Separating them is what makes renaming possible without a special case: we
 // delete the old key and write the new one.
 //
+// invMu serialises every read-modify-write of inventory.json.
+//
+// Both writers do the same three steps: read the raw file, change one key in
+// memory, write the whole document back. Two of them at once — a user clicking
+// two toggles quickly, the page and an API client writing together — is a lost
+// update: each started from the same bytes, so whichever finishes last quietly
+// erases the other's change, and an interrupted plain write can leave the file
+// half-written. The lock spans the whole sequence rather than only the write,
+// because that is where the interleaving does the damage; the writes themselves
+// are atomic (writeFileAtomic), so a reader never sees a truncated inventory.
+var invMu sync.Mutex
+
 // This is the "configuration" half of the tool: the inventory is the source of
 // truth, and from here on a human can maintain all of it from the page.
 func handleServer(w http.ResponseWriter, r *http.Request, e *Engine) {
@@ -394,6 +407,9 @@ func handleServer(w http.ResponseWriter, r *http.Request, e *Engine) {
 	// We re-read the RAW file (not the typed structure): the inventory contains
 	// a $comment block that documents the format, and re-reading it into a
 	// structure would make it disappear on the first write.
+	invMu.Lock()
+	defer invMu.Unlock()
+
 	invPath := InventoryPath()
 	raw, err := os.ReadFile(invPath)
 	if err != nil {
@@ -461,7 +477,7 @@ func handleServer(w http.ResponseWriter, r *http.Request, e *Engine) {
 		writeErr(w, 500, err)
 		return
 	}
-	if err := os.WriteFile(invPath, encoded, 0o644); err != nil {
+	if err := writeFileAtomic(invPath, encoded, 0o644); err != nil {
 		writeErr(w, 500, err)
 		return
 	}
@@ -661,6 +677,10 @@ func handleApply(w http.ResponseWriter, r *http.Request) {
 // when the server targeted "all" therefore materialises the full list MINUS that
 // client — otherwise "none" would be re-read as "all".
 func setServerClient(invPath, server, client string, on bool, plugins []*Plugin) error {
+	// Read-modify-write of the whole document: see invMu.
+	invMu.Lock()
+	defer invMu.Unlock()
+
 	raw, err := os.ReadFile(invPath)
 	if err != nil {
 		return err
@@ -726,5 +746,5 @@ func setServerClient(invPath, server, client string, on bool, plugins []*Plugin)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(invPath, encoded, 0o644)
+	return writeFileAtomic(invPath, encoded, 0o644)
 }
