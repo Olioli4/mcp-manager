@@ -203,17 +203,19 @@ type apiPlugin struct {
 }
 
 type apiServer struct {
-	Transport    string   `json:"transport"`
-	Command      string   `json:"command"`
-	Args         []string `json:"args"`
-	URL          string   `json:"url"`
-	Why          string   `json:"why"`
-	Notes        []string `json:"notes"`
-	NeedsService string   `json:"needs_service"`
-	Clients      []string `json:"clients"`
-	Explicit     bool     `json:"clients_explicit"` // false = "all"
-	Manager      bool     `json:"manager"`
-	Direct       bool     `json:"direct"`
+	Transport    string            `json:"transport"`
+	Command      string            `json:"command"`
+	Args         []string          `json:"args"`
+	URL          string            `json:"url"`
+	Why          string            `json:"why"`
+	Notes        []string          `json:"notes"`
+	NeedsService string            `json:"needs_service"`
+	Env          map[string]string `json:"env,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Clients      []string          `json:"clients"`
+	Explicit     bool              `json:"clients_explicit"` // false = "all"
+	Manager      bool              `json:"manager"`
+	Direct       bool              `json:"direct"`
 }
 
 // apiProxy: the state of a server's proxy — the half an MCP client cannot show.
@@ -265,6 +267,7 @@ func handleState(w http.ResponseWriter, e *Engine) {
 		servers[name] = apiServer{
 			Transport: s.Transport, Command: s.Command, Args: s.Args, URL: s.URL,
 			Why: s.Why, Notes: s.Notes, NeedsService: s.NeedsService,
+			Env: s.Env, Headers: s.Headers,
 			Clients: s.Clients, Explicit: s.Clients != nil,
 			Manager: s.Manager, Direct: s.Direct,
 		}
@@ -563,6 +566,17 @@ func serverToMap(s InventoryServer) map[string]any {
 	if s.NeedsService != "" {
 		m["needs_service"] = s.NeedsService
 	}
+	// env and headers must survive a UI save (M6): the old serverToMap copied a
+	// known list of fields and dropped everything else, so one click on Save
+	// erased the hand-written API-key reference of a server the form never
+	// showed. nil = absent: write nothing. An empty map is a real value, but
+	// there is nothing useful to write for it, so len>0 gates both.
+	if len(s.Env) > 0 {
+		m["env"] = s.Env
+	}
+	if len(s.Headers) > 0 {
+		m["headers"] = s.Headers
+	}
 	// nil = absent = ALL. An empty list is a REAL value ("none") and must
 	// therefore survive the write — that is the whole point of the distinction.
 	if s.Clients != nil {
@@ -611,6 +625,26 @@ func validateServerSpec(name string, s InventoryServer, e *Engine, plugins []*Pl
 		return fmt.Errorf("unknown transport %q — expected 'stdio' or 'http'", s.Transport)
 	}
 
+	// env and headers (M6): checked at write time, because a broken pair is
+	// invisible until the server fails to start weeks later.
+	//   - an env key must be a real variable name: "API KEY=1" is not one;
+	//   - a header value must not contain CR or LF: that is request splitting,
+	//     where a saved "value" injects extra headers (or a body) into every
+	//     request the manager forwards.
+	for k := range s.Env {
+		if !isVarName(k) {
+			return fmt.Errorf("env key %q: an environment variable name is letters, digits and underscores, starting with a letter", k)
+		}
+	}
+	for k, v := range s.Headers {
+		if k == "" || strings.ContainsAny(k, " \t:;\r\n") {
+			return fmt.Errorf("header key %q: no spaces, no colon, no line break", k)
+		}
+		if strings.ContainsAny(v, "\r\n") {
+			return fmt.Errorf("header %q value contains a line break: that splits the HTTP request — every reference here is one line", k)
+		}
+	}
+
 	known := map[string]bool{}
 	for _, p := range plugins {
 		known[p.ID] = true
@@ -627,6 +661,26 @@ func validateServerSpec(name string, s InventoryServer, e *Engine, plugins []*Pl
 		}
 	}
 	return nil
+}
+
+// isVarName: a shape an environment variable name can really take (M6).
+func isVarName(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i, r := range k {
+		if r == '_' {
+			continue
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' && i > 0 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // handleApply: POST /api/apply {"write": true|false}

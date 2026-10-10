@@ -419,7 +419,29 @@ let editing = null;   // null | { key: <current name, "" when creating>, spec: {
 
 function blankSpec() {
   return { transport: 'stdio', command: '', args: [], url: '', why: '', notes: [],
-           needs_service: '', clients: null, manager: false, direct: false };
+           needs_service: '', env: {}, headers: {}, clients: null, manager: false, direct: false };
+}
+
+// mapToLines / linesToMap: the form grammar for env and headers (M6).
+// One pair per line. Env splits at the first '='; a header name ends at its
+// first ':' — so values may contain both characters freely. A line without
+// the separator is refused LOUDLY: silently dropping it would save a spec
+// missing an API key the user believes they typed.
+function mapToLines(m, sep) {
+  return Object.entries(m || {}).map(([k, v]) => k + sep + v).join('\n');
+}
+function linesToMap(text, sep, what) {
+  const out = {};
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf(sep);
+    if (i < 0) throw new Error(`${what} line "${t}" is missing its "${sep}" — write one pair per line`);
+    const k = t.slice(0, i).trim(), v = t.slice(i + sep.length).trim();
+    if (!k) throw new Error(`${what} line "${t}" has an empty key`);
+    out[k] = v;
+  }
+  return out;
 }
 
 // splitArgs splits a command line like a shell does: spaces separate, quotes
@@ -477,6 +499,14 @@ function formHTML() {
 
     <label class="f" for="f-notes">notes — one per line (traps, delays, prerequisites)</label>
     <textarea id="f-notes" placeholder="The first call after an idle period reloads the engine: 20–30 s.">${esc((s.notes || []).join('\n'))}</textarea>
+
+    <label class="f" for="f-env">environment (stdio) — KEY=VALUE per line; write <code>\${NAME}</code> to
+      mean "the value of NAME, from the manager's environment at launch" — the key itself never enters the file</label>
+    <textarea id="f-env" rows="3" spellcheck="false" placeholder="OPENAI_API_KEY=\${OPENAI_API_KEY}">${esc(mapToLines(s.env, '='))}</textarea>
+
+    <label class="f" for="f-headers">HTTP headers (http) — Name: value per line; same <code>\${NAME}</code> rule
+      (Authorization, x-api-key…)</label>
+    <textarea id="f-headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer \${MCP_TOKEN}">${esc(mapToLines(s.headers, ': '))}</textarea>
 
     <div class="two">
       <div>
@@ -613,12 +643,18 @@ function specFromApi(name) {
     transport: s.transport, command: s.command || '', args: s.args || [],
     url: s.url || '', why: s.why || '', notes: s.notes || [],
     needs_service: s.needs_service || '',
+    env: s.env || {}, headers: s.headers || {},
     clients: s.clients_explicit ? (s.clients || []) : null,
     manager: !!s.manager, direct: !!s.direct,
   };
 }
 
 async function saveServer() {
+  let env, headers;
+  try {
+    env = linesToMap($('#f-env').value, '=', 'env');
+    headers = linesToMap($('#f-headers').value, ':', 'header');
+  } catch (e) { toast(e.message, true); return; }
   const spec = {
     transport: $('#f-transport').value,
     command: $('#f-command').value.trim(),
@@ -627,6 +663,7 @@ async function saveServer() {
     why: $('#f-why').value.trim(),
     notes: $('#f-notes').value.split('\n').map(x => x.trim()).filter(Boolean),
     needs_service: $('#f-needs').value,
+    env, headers,
     clients: document.querySelector('input[name=f-target]:checked').value === 'some'
       ? [...document.querySelectorAll('input[name=f-client]:checked')].map(x => x.value)
       : null,

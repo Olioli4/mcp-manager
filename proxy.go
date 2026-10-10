@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,10 +175,24 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 
 	switch b.spec.Transport {
 	case "http":
-		return cli.Connect(cctx, &mcp.StreamableClientTransport{
+		tr := &mcp.StreamableClientTransport{
 			Endpoint:   b.spec.URL,
 			MaxRetries: 0, // we do not want 5 silent attempts: we want the error fast
-		}, nil)
+		}
+		if len(b.spec.Headers) > 0 {
+			// StreamableClientTransport offers no header field, but it takes our
+			// http.Client — and a client is exactly a RoundTripper with retries
+			// around it. The RoundTripper stamps every request (POSTs, GET-SSE,
+			// the standalone stream) with the inventory's headers, resolving
+			// ${NAME} at the moment of use.
+			tr.HTTPClient = &http.Client{
+				Transport: &headerRoundTripper{
+					base:    http.DefaultTransport,
+					headers: b.spec.Headers,
+				},
+			}
+		}
+		return cli.Connect(cctx, tr, nil)
 	case "stdio":
 		args := b.spec.Args
 		cmd := exec.Command(b.spec.Command, args...)
@@ -195,6 +210,17 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 			HideWindow:    true,
 			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 		}
+		if len(b.spec.Env) > 0 {
+			// The inventory stores variable NAMES; the environment holds the
+			// values. A missing reference refuses the launch with the name
+			// named — "the server started and the API key silently defaulted to
+			// empty" is the failure nobody debugs.
+			pairs, err := resolveEnvPairs(b.spec.Env)
+			if err != nil {
+				return nil, fmt.Errorf("stdio %s: %w", b.name, err)
+			}
+			cmd.Env = append(os.Environ(), pairs...)
+		}
 		// jobbedTransport assigns the child to the kill-on-exit Job Object
 		// (job_windows.go, M9) the instant its PID exists: when the manager
 		// exits, the kernel kills npx, node, and everything they spawned.
@@ -204,6 +230,75 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 	default:
 		return nil, fmt.Errorf("unknown transport %q", b.spec.Transport)
 	}
+}
+
+// secretRef is the whole of the secrets grammar (M6): ${NAME} inside a value
+// means "the value of the environment variable NAME, right now". Everything
+// else is literal. The inventory therefore never contains a secret, a client's
+// config file never receives one, and the only copy of the key stays where the
+// user put it — in the environment.
+var secretRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// resolveSecret expands every ${NAME} in v from the environment. A reference
+// to an unset variable is an ERROR, never an empty string: a server that
+// starts with an empty API key fails in ways that point at everything except
+// the missing variable.
+func resolveSecret(v string) (string, error) {
+	var missing []string
+	out := secretRef.ReplaceAllStringFunc(v, func(m string) string {
+		name := secretRef.FindStringSubmatch(m)[1]
+		val := os.Getenv(name)
+		if val == "" {
+			missing = append(missing, name)
+			return m
+		}
+		return val
+	})
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return "", fmt.Errorf("environment variable(s) not set: %s — the inventory stores variable names, the secret itself belongs in the manager's environment", strings.Join(missing, ", "))
+	}
+	return out, nil
+}
+
+// resolveEnvPairs turns the env map into "KEY=value" lines with every ${NAME}
+// expanded. Keys are sorted so a repeated launch builds the same environment
+// (a stable byte sequence is what makes a diff of two runs readable).
+func resolveEnvPairs(env map[string]string) ([]string, error) {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v, err := resolveSecret(env[k])
+		if err != nil {
+			return nil, fmt.Errorf("env %s: %w", k, err)
+		}
+		out = append(out, k+"="+v)
+	}
+	return out, nil
+}
+
+// headerRoundTripper stamps the inventory's headers onto every HTTP request
+// the SDK's transport makes. The RoundTripper contract forbids modifying the
+// request handed to it, so each round trip works on a clone.
+type headerRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for k, v := range t.headers {
+		resolved, err := resolveSecret(v)
+		if err != nil {
+			return nil, fmt.Errorf("header %q: %w", k, err)
+		}
+		clone.Header.Set(k, resolved)
+	}
+	return t.base.RoundTrip(clone)
 }
 
 // borrowLocked counts a call on the session and stops the idle timer. It must be

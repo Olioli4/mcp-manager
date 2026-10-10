@@ -377,6 +377,59 @@ func testPlugin(path string) *Plugin {
 	}
 }
 
+// M6: env and headers must reach the client's config for the servers that need
+// them (direct writes) — and must NOT for the routed ones, where the manager
+// itself carries the auth. And values travel VERBATIM: a resolved secret in a
+// plaintext config file is exactly what the inventory's "names only" rule
+// exists to prevent.
+func TestRenderCarriesEnvAndHeaders(t *testing.T) {
+	p := testPlugin(filepath.Join(t.TempDir(), "cfg.json"))
+
+	stdio := InventoryServer{
+		Transport: "stdio", Command: "npx", Args: []string{"-y", "@some/mcp"},
+		Env: map[string]string{"OPENAI_API_KEY": "${OPENAI_API_KEY}"},
+	}
+	m := Render(p, "gen", stdio)
+	env, ok := m["env"].(map[string]string)
+	if !ok || env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
+		t.Fatalf("stdio render lost env: %v (m=%v)", m["env"], m)
+	}
+
+	httpDirect := InventoryServer{
+		Transport: "http", URL: "https://remote.example/mcp",
+		Headers: map[string]string{"Authorization": "Bearer ${MCP_TOKEN}"},
+	}
+	m = Render(p, "remote", httpDirect)
+	hdr, ok := m["headers"].(map[string]string)
+	if !ok || hdr["Authorization"] != "Bearer ${MCP_TOKEN}" {
+		t.Fatalf("http render lost headers: %v (m=%v)", m["headers"], m)
+	}
+
+	// Absent fields must stay absent: an "env": {} line in every block of
+	// every client file is noise a human reads.
+	m = Render(p, "plain", InventoryServer{Transport: "stdio", Command: "x"})
+	if _, has := m["env"]; has {
+		t.Error(`a server without env got an "env" key in the client's config`)
+	}
+	if _, has := m["headers"]; has {
+		t.Error(`a server without headers got a "headers" key in the client's config`)
+	}
+
+	// Routed through the manager: the client talks to localhost, the manager
+	// forwards with the headers — writing them into the client file would put
+	// the reference (and any literal) in a file the manager does not control.
+	proxied := testPlugin(filepath.Join(t.TempDir(), "cfg2.json"))
+	proxied.ProxyBase = "http://127.0.0.1:7812/mcp"
+	m = Render(proxied, "remote", httpDirect)
+	if _, has := m["headers"]; has {
+		t.Error(`a routed server got "headers" in the client's config: the manager is the one who authenticates`)
+	}
+	m = Render(proxied, "gen", stdio)
+	if _, has := m["env"]; has {
+		t.Error(`a routed server got "env" in the client's config: the manager is the one who launches`)
+	}
+}
+
 // diffBlock must converge: comparing a block with itself finds nothing.
 func TestDiffBlockIsIdempotent(t *testing.T) {
 	raw := json.RawMessage(`{"a":{"url":"http://x"},"b":{"url":"http://y"}}`)

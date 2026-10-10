@@ -40,6 +40,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -517,5 +519,95 @@ func TestMergeProxiesComparesSpecsByMeaning(t *testing.T) {
 		map[string]*backend{"s": newNone})
 	if next["s"] != newNone || len(dropped) != 1 || dropped[0] != oldAll {
 		t.Fatal("a server whose client list went from ALL to NONE was not rebuilt")
+	}
+}
+
+// M6: ${NAME} is the whole secrets grammar — the inventory stores names, the
+// environment holds values, and the expansion happens at the moment of use.
+// An unset reference must be a named error, never an empty string: a server
+// launched with "OPENAI_API_KEY=" fails with messages that blame everything
+// except the missing variable.
+func TestResolveSecretExpandsAndRefuses(t *testing.T) {
+	t.Setenv("MCP_TEST_KEY", "sk-real-value")
+
+	got, err := resolveSecret("Bearer ${MCP_TEST_KEY}")
+	if err != nil || got != "Bearer sk-real-value" {
+		t.Fatalf("expansion gave %q, err %v, want the env value in place", got, err)
+	}
+
+	// Literals stay literals.
+	got, err = resolveSecret("text/plain")
+	if err != nil || got != "text/plain" {
+		t.Fatalf("a literal was rewritten: %q, err %v", got, err)
+	}
+
+	_, err = resolveSecret("${MCP_TEST_KEY_UNSET}")
+	if err == nil {
+		t.Fatal(`an unset ${VAR} expanded to nothing instead of refusing`)
+	}
+	if !strings.Contains(err.Error(), "MCP_TEST_KEY_UNSET") {
+		t.Errorf("the error must name the missing variable, got: %v", err)
+	}
+}
+
+func TestResolveEnvPairsExpandsSorted(t *testing.T) {
+	t.Setenv("A_KEY", "1")
+	t.Setenv("B_KEY", "2")
+
+	pairs, err := resolveEnvPairs(map[string]string{
+		"B_KEY": "${B_KEY}",
+		"A_KEY": "A_KEY", // literal, not a reference: travels verbatim
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"A_KEY=A_KEY", "B_KEY=2"}
+	if len(pairs) != 2 || pairs[0] != want[0] || pairs[1] != want[1] {
+		t.Fatalf("pairs = %v, want %v (sorted, expanded)", pairs, want)
+	}
+
+	if _, err := resolveEnvPairs(map[string]string{"K": "${NOT_SET_AT_ALL}"}); err == nil {
+		t.Error("resolveEnvPairs accepted an unset reference")
+	}
+}
+
+// The header stamp is the manager's auth for remote servers. Two shapes to
+// prove: the header must arrive at the server RESOLVED (httptest echoes it
+// back), and the request handed to the RoundTripper must come out untouched —
+// the contract says a RoundTripper does not modify its request, and http.Client
+// reuses requests on redirects.
+func TestHeaderRoundTripperStampsRequests(t *testing.T) {
+	t.Setenv("MCP_TEST_TOKEN", "tok-42")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, r.Header.Get("Authorization"))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: &headerRoundTripper{
+		base:    http.DefaultTransport,
+		headers: map[string]string{"Authorization": "Bearer ${MCP_TEST_TOKEN}", "X-Static": "on"},
+	}}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "Bearer tok-42" {
+		t.Fatalf("the server saw Authorization %q, want the resolved value", body)
+	}
+
+	// The clone discipline: the original request must not carry the headers.
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	if _, err := (&headerRoundTripper{
+		base:    http.DefaultTransport,
+		headers: map[string]string{"X-Stamped": "yes"},
+	}).RoundTrip(req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("X-Stamped") != "" {
+		t.Fatal("the RoundTripper modified the request it was handed (contract: work on a clone)")
 	}
 }

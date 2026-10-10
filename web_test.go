@@ -90,3 +90,76 @@ func TestInventoryToggleWritesAreSerialised(t *testing.T) {
 		}
 	}
 }
+
+// M6: the UI form does not show env/headers (they live in the file, hand-edited
+// with secrets-reference values). The old serverToMap copied a known list of
+// fields and dropped everything else — so ANY save from the form erased them.
+// The pair must survive the round trip through the API, unchanged, and stay
+// absent when absent.
+func TestServerToMapPreservesEnvHeaders(t *testing.T) {
+	s := InventoryServer{
+		Transport: "stdio", Command: "npx",
+		Env:     map[string]string{"OPENAI_API_KEY": "${OPENAI_API_KEY}"},
+		Headers: map[string]string{"Authorization": "Bearer ${MCP_TOKEN}"},
+	}
+	m := serverToMap(s)
+	env, ok := m["env"].(map[string]string)
+	if !ok || env["OPENAI_API_KEY"] != "${OPENAI_API_KEY}" {
+		t.Fatalf("env lost through the UI save path: %v", m["env"])
+	}
+	hdr, ok := m["headers"].(map[string]string)
+	if !ok || hdr["Authorization"] != "Bearer ${MCP_TOKEN}" {
+		t.Fatalf("headers lost through the UI save path: %v", m["headers"])
+	}
+
+	m = serverToMap(InventoryServer{Transport: "stdio", Command: "x"})
+	if _, has := m["env"]; has {
+		t.Error(`"env" written for a server that has none`)
+	}
+	if _, has := m["headers"]; has {
+		t.Error(`"headers" written for a server that has none`)
+	}
+}
+
+// A broken pair is invisible until the server fails to start weeks later: an
+// env key with a space is not a variable name, and a header value with a line
+// break SPLITS the HTTP request — everything after the break becomes headers of
+// its own (or a body). Refuse both at write time, where the user is standing.
+func TestValidateServerSpecRejectsBrokenEnvHeaders(t *testing.T) {
+	e := newTestEngine(t, filepath.Join(t.TempDir(), "never.marker"))
+	plugins := []*Plugin{{ID: "claude-desktop", Label: "Claude Desktop"}}
+
+	bad := InventoryServer{
+		Transport: "stdio", Command: "npx",
+		Env: map[string]string{"API KEY": "${X}"},
+	}
+	if err := validateServerSpec("s", bad, e, plugins); err == nil {
+		t.Error(`env key "API KEY" (a space, not a variable name) was accepted`)
+	} else if !strings.Contains(err.Error(), "API KEY") {
+		t.Errorf("the error must name the offending key, got: %v", err)
+	}
+
+	bad = InventoryServer{Transport: "stdio", Command: "npx", Env: map[string]string{"1BAD": "x"}}
+	if err := validateServerSpec("s", bad, e, plugins); err == nil {
+		t.Error("env key starting with a digit was accepted")
+	}
+
+	bad = InventoryServer{
+		Transport: "http", URL: "https://x/mcp",
+		Headers: map[string]string{"Authorization": "Bearer t\r\nX-Evil: 1"},
+	}
+	if err := validateServerSpec("s", bad, e, plugins); err == nil {
+		t.Fatal("a header value with CRLF (request splitting) was accepted")
+	} else if !strings.Contains(err.Error(), "line break") {
+		t.Errorf("the error must explain the split, got: %v", err)
+	}
+
+	good := InventoryServer{
+		Transport: "http", URL: "https://x/mcp",
+		Headers: map[string]string{"Authorization": "Bearer ${MCP_TOKEN}"},
+		Env:     map[string]string{"OK_KEY_1": "${V}"},
+	}
+	if err := validateServerSpec("s", good, e, plugins); err != nil {
+		t.Errorf("the valid pair was refused: %v", err)
+	}
+}

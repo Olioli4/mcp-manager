@@ -37,6 +37,16 @@ type InventoryServer struct {
 	Why          string   `json:"why"`
 	Notes        []string `json:"notes"`
 	NeedsService string   `json:"needs_service"`
+	// Env adds environment variables to the stdio server the manager launches
+	// (API keys live here: npx-based servers read theirs from the environment).
+	// Headers adds HTTP headers to http requests (the shape of auth on remote
+	// servers). Both follow the one rule that makes secrets safe to ship:
+	// the inventory stores a VARIABLE NAME, never a secret value. Write
+	// "OPENAI_API_KEY": "${OPENAI_API_KEY}" and the real key never appears in
+	// inventory.json, never lands in a client's config file, and is read from
+	// the environment only at the moment of use (connect/launch).
+	Env     map[string]string `json:"env"`
+	Headers map[string]string `json:"headers"`
 	// Clients limits this server to certain clients (plugin ids).
 	// Absent or empty = ALL clients. That is the deliberate default: a client
 	// added tomorrow inherits everything, and we restrict afterwards if needed.
@@ -267,6 +277,14 @@ func Render(p *Plugin, name string, s InventoryServer) map[string]any {
 	if s.Transport == "http" {
 		setType("http")
 		m[p.HTTPKey] = s.URL
+		if len(s.Headers) > 0 {
+			// Values are variable references by the inventory's rule; they are
+			// written VERBATIM. The moment of use resolves them — and that
+			// moment is the manager's connect, not this file: a secret copied
+			// into a client's config is a secret in a plaintext file on disk,
+			// which is exactly what the rule exists to prevent.
+			m["headers"] = s.Headers
+		}
 		return m
 	}
 
@@ -282,6 +300,10 @@ func Render(p *Plugin, name string, s InventoryServer) map[string]any {
 		if len(s.Args) > 0 {
 			m["args"] = s.Args
 		}
+	}
+	if len(s.Env) > 0 {
+		// Verbatim, same rule as headers above.
+		m["env"] = s.Env
 	}
 	return m
 }
