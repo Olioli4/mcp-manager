@@ -95,14 +95,19 @@ func (k *keepaliveWriter) stop() {
 	})
 }
 
-// http.ResponseWriter forwarding. Flush must be present and LOCKED — and
-// Unwrap deliberately ABSENT: the SDK reaches for Flush through
-// http.NewResponseController, which unwraps until it finds a Flush. With
-// Unwrap, it lands on the raw response straight past this mutex, and the
-// ping races the SDK's flush (proven by -race). Without it, the controller
-// finds OUR Flush, every flush is serialised with every write, one stream,
-// one lock. The SDK v1.8.0 uses exactly Write and Flush — nothing to Hijack,
-// no deadlines to set.
+// http.ResponseWriter forwarding. Unwrap is deliberately ABSENT, and Flush
+// must have EXACTLY the http.Flusher shape — both facts are load-bearing,
+// proven by TestStatefulClientConnectsWithoutWaitingForAPing plus -race.
+// The SDK's streamable server releases the standalone SSE stream's headers
+// with http.NewResponseController(w).Flush(). That walk matches http.Flusher
+// (Flush(), NO error return) at our level, then stops. Give Flush an error
+// return and it is invisible: ErrNotSupported, headers sit in net/http's
+// buffer, every stateful client stalls in Connect until the first ping —
+// 30 s per new session. Add Unwrap and the walk bypasses this mutex onto the
+// raw response, whose Flush touches the connection buffer outside net/http's
+// own write lock: a ping racing it is a DATA RACE (bufio slicecopy, caught by
+// -race). Shaped as a Flusher, every flush the SDK asks for lands HERE,
+// serialised with every write. One stream, one lock.
 
 func (k *keepaliveWriter) Header() http.Header { return k.w.Header() }
 
@@ -118,10 +123,10 @@ func (k *keepaliveWriter) WriteHeader(code int) {
 	k.w.WriteHeader(code)
 }
 
-func (k *keepaliveWriter) Flush() error {
+func (k *keepaliveWriter) Flush() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return k.flushLocked()
+	_ = k.flushLocked()
 }
 
 func (k *keepaliveWriter) flushLocked() error {

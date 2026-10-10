@@ -225,6 +225,33 @@ func TestKeepalivePingsStopWhenTheHandlerReturns(t *testing.T) {
 	}
 }
 
+// The handshake must not depend on a ping. A stateful client opens the
+// standalone SSE stream inside Connect, and the SDK releases its headers with
+// http.ResponseController(w).Flush(). A wrapper that hides that Flush (no
+// http.Flusher match, no Unwrap) turns the call into ErrNotSupported, the
+// SDK ignores it, and every connect stalls until the first ping flushes the
+// stream — 30 s per new session at production interval. The load-bearing
+// fact: Connect completes long before any ping would fire.
+func TestStatefulClientConnectsWithoutWaitingForAPing(t *testing.T) {
+	// Deliberately NOT shortening sseKeepaliveInterval: the point is that the
+	// handshake cannot lean on pings at all.
+	e := newTestEngine(t, filepath.Join(t.TempDir(), "never.marker"))
+	b := newBackend(e, "vision", InventoryServer{Transport: "stdio", Command: "none.exe", Why: "proxy"})
+
+	ts := httptest.NewServer(b.handler)
+	defer ts.CloseClientConnections()
+
+	cli := mcp.NewClient(&mcp.Implementation{Name: "handshake", Version: "test"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := cli.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatalf("stateful connect stalled: %v — the standalone SSE stream never flushed its "+
+			"headers: the keepalive writer hides ResponseController.Flush from the SDK", err)
+	}
+	defer sess.Close()
+}
+
 // The proxy backends are the servers opencode actually connects to; their
 // handler must serve a real MCP session through the keepalive wrapper.
 func TestProxyHandlerServesMCPThroughKeepalive(t *testing.T) {
