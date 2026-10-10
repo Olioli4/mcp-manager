@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -179,8 +180,23 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 		}, nil)
 	case "stdio":
 		args := b.spec.Args
+		cmd := exec.Command(b.spec.Command, args...)
+		// The tray is built with -H=windowsgui: it has no console, so every
+		// stdio server we spawn (npx, node) gets a VISIBLE CONSOLE WINDOW each
+		// time the idle timer releases it and a new request reconnects. On a
+		// machine with playwright + aas + openai-agents proxied, that is three
+		// black windows appearing at random while the user works.
+		//
+		// Same attribute engine.go uses: CREATE_NO_WINDOW gives the process a
+		// console (stdio pipes work, measured) that is never shown; HideWindow
+		// covers launchers like npx.cmd that create a window before their own
+		// flags apply.
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		}
 		return cli.Connect(cctx, &mcp.CommandTransport{
-			Command: exec.Command(b.spec.Command, args...),
+			Command: cmd,
 		}, nil)
 	default:
 		return nil, fmt.Errorf("unknown transport %q", b.spec.Transport)
