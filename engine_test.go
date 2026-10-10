@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A manifest on disk, for an engine that never touches the user's real files.
@@ -75,6 +76,80 @@ func TestStartLaunchesAConsoleProgramThroughExe(t *testing.T) {
 	}
 	if !strings.Contains(msg, "started") {
 		t.Fatalf("unexpected start report: %q", msg)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("nobody launched at all: %v\nstart said: %s", err, msg)
+	}
+	if n := strings.Count(string(raw), "launch"); n != 1 {
+		t.Fatalf("%d launches; want exactly 1\nlog:\n%s", n, raw)
+	}
+}
+
+// M8: a cmd: start must return in the probe's time, not in the launcher's.
+//
+// hidden() used cmd.Output(), which blocks until EVERY handle to stdout
+// closes. A launcher that boots a long-lived child keeps that handle open for
+// the life of the child — Start hung with no timeout, the tray button frozen,
+// the per-service lock held, every proxy request behind it frozen. This is the
+// normal shape of a start script ("boot the dev server, return"), so the hang
+// was not exotic.
+//
+// The fixture makes that exact shape: the cmd: entry logs its launch, binds a
+// TCP port for the probe, spawns a child with -NoNewWindow (the child INHERITS
+// the launcher's stdout), pauses two seconds for the handles to attach, and
+// exits. The child then holds stdout open for 25 more seconds.
+//
+// With the detached launch: Start returns as soon as the probe sees the port —
+// a few seconds. With cmd.Output(): Start cannot return before the child dies,
+// ~25 seconds, by which time the listener is gone and the 20-second probe
+// timeout has expired on top of it. The elapsed bound catches that;
+// mutation-checked by putting hidden() back in launch.
+//
+// The child sleeps 25 seconds and exits by itself: nothing here needs a real
+// service, and nothing survives the test beyond that.
+func TestCmdStartReturnsWhileItsChildHoldsStdoutOpen(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.ToSlash(filepath.Join(dir, "launches.log"))
+	port := freePort(t)
+
+	script := fmt.Sprintf(
+		"Add-Content -LiteralPath '%s' -Value 'launch'; "+
+			"$l=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,%d); "+
+			"$l.Start(); "+
+			"Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 25' -NoNewWindow; "+
+			"Start-Sleep -Seconds 2; $l.Stop()",
+		logPath, port)
+
+	e := writeManifest(t, dir, fmt.Sprintf(`{
+  "settings": {"web_port": 8787, "default_probe_timeout_s": 20, "poll_seconds": 5},
+  "services": [{
+    "id": "detached",
+    "label": "Detached",
+    "why": "test fixture: a cmd: launcher whose child inherits stdout",
+    "start": {"cmd": "powershell.exe", "args": ["-NoProfile", "-NonInteractive", "-Command", "%s"]},
+    "stop": {"process": "no-such-process-for-this-test.exe"},
+    "probe": {"port": %d}
+  }]
+}`, script, port))
+
+	start := time.Now()
+	msg, err := e.Start("detached")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("start failed after %s: %v", elapsed, err)
+	}
+	if !strings.Contains(msg, "started") {
+		t.Fatalf("unexpected start report: %q", msg)
+	}
+	// The probe answers in seconds. The child's stdout is open for ~25 s and
+	// the old cmd.Output() waited for ALL of it (plus the 20 s probe timeout
+	// after the listener closed): the bound sits well below that, above the
+	// honest few seconds.
+	if elapsed > 15*time.Second {
+		t.Fatalf("Start took %s: it waited on the launcher's pipes, not on the probe\n%s", elapsed, msg)
 	}
 
 	raw, err := os.ReadFile(logPath)

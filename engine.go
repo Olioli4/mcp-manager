@@ -392,32 +392,44 @@ func waitProcessesGone(name, match string, d time.Duration) bool {
 	}
 }
 
+// startDetached launches a program without waiting for it and without ever
+// reading its pipes. That "without reading" is the point (M8): hidden() used
+// cmd.Output(), which blocks until EVERY handle to stdout closes — and a
+// launcher that leaves a long-lived child behind (the normal shape of "start my
+// dev server and return") keeps that handle open for the life of the child.
+// Start then hung with no timeout, tray button frozen, proxy request frozen,
+// the whole per-service lock held. A launch must be fire-and-forget: we learn
+// whether it worked from the PROBE, not from the launcher's exit.
+//
+// The flags are the measured ones: DETACHED_PROCESS (0x8) makes console
+// programs — powershell.exe, three runs each — not run AT ALL, silently:
+// Start returns no error and the program is never there, so the tray announced
+// a program that never existed. CREATE_NO_WINDOW gives the console to the
+// process (stdio pipes work) and never shows it; HideWindow covers launchers
+// like npx.cmd that create a window before their own flags apply. The program
+// outlives us, which is what a service start must do.
+func startDetached(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		HideWindow:    true,
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
 func (e *Engine) launch(a Action) error {
 	switch {
 	case a.Exe != "":
-		// Detached: the program must survive our own exit — but NOT via
-		// DETACHED_PROCESS (0x8). Measured on this machine, three runs each:
-		// powershell.exe launched with DETACHED_PROCESS does not run at all, and
-		// fails SILENTLY — Start returns no error, the program is simply never
-		// there. A console program given no console dies during its own startup,
-		// so the tray reported "started" for a program that never existed.
-		//
-		// CREATE_NO_WINDOW is what we actually wanted in the first place: the
-		// console exists (console programs accept it, measured ran=true) but is
-		// never shown, and HideWindow covers the window cmd.exe-style launchers
-		// create before their flag applies. The program still outlives us.
-		cmd := exec.Command(a.Exe, a.Args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-			HideWindow:    true,
-		}
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		return cmd.Process.Release()
+		return startDetached(a.Exe, a.Args...)
 	case a.Cmd != "":
-		_, err := hidden(a.Cmd, a.Args...)
-		return err
+		// Same fire-and-forget as exe. The cmd: entries in a manifest are
+		// exactly the launchers that spawn and return (cmd /c start ..., a
+		// .bat wrapper, a powershell that boots a server) — precisely the
+		// shape that blocked cmd.Output() forever.
+		return startDetached(a.Cmd, a.Args...)
 	default:
 		return fmt.Errorf("no launch method declared (neither exe, nor cmd)")
 	}
@@ -426,8 +438,10 @@ func (e *Engine) launch(a Action) error {
 func (e *Engine) terminate(s *Service) error {
 	switch {
 	case s.Stop.Cmd != "":
-		_, err := hidden(s.Stop.Cmd, s.Stop.Args...)
-		return err
+		// Detached for the same reason as launch: a stop command that
+		// spawns children must not hang Start/Stop on its pipes. Stop's own
+		// truth comes from waitFor, which re-probes until the service is red.
+		return startDetached(s.Stop.Cmd, s.Stop.Args...)
 	case s.Stop.Process != "":
 		return killProcess(s.Stop.Process, s.Stop.OnlyIfCmdlineMatches)
 	default:
