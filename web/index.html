@@ -135,6 +135,28 @@
   tr:hover td { background: rgba(255,255,255,0.03); }
   td.name { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 500; }
   td .tag { color: var(--dim); font-size: 11px; margin-left: 8px; background: rgba(255,255,255,0.1); padding: 3px 8px; border-radius: 99px; }
+
+  /* The matrix at narrow width (the review's HIGH): a CSS Grid, not a <table>.
+     Blink ignores position:sticky on table cells, and only grid items can pin
+     the first column — the server name — to the left edge while the rest of
+     the matrix scrolls sideways inside its own box, so a tick you click is
+     never separated from the row it belongs to. Sticky cells need a SOLID
+     background: content sliding underneath must not show through. Column
+     widths are a readable minimum: at narrow screens the grid is wider than
+     its box and scrolls, instead of every cell squishing to unreadable
+     pixels to "fit". */
+  .table-wrap { overflow-x: auto; }
+  .matrix { display: grid; }
+  .matrix > div { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .matrix .mh { background: rgba(0,0,0,0.25); font-weight: 600; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .matrix .rot { text-align: center; }
+  .matrix .name { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .matrix .name .tag { color: var(--dim); font-size: 11px; margin-left: 8px; background: rgba(255,255,255,0.1); padding: 3px 8px; border-radius: 99px; }
+  .matrix .cell-name {
+    position: sticky; left: 0; z-index: 1;
+    background: #17171b; box-shadow: 1px 0 0 var(--line);
+  }
+  .matrix > div.mh.cell-name { background: #101013; }
   
   input[type=checkbox] { 
     width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent);
@@ -185,6 +207,27 @@
   .pill.ok { color: var(--ok); border-color: rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.1); }
   .pill.warn { color: var(--warn); border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.1); }
   .err { color: var(--bad); font-weight: 500; }
+
+  /* --- Narrow screens (the review asked for ~640px): cards stack to one
+     column, the form's two-column grid collapses to one, padding shrinks so
+     content — not chrome — owns the width. --- */
+  @media (max-width: 640px) {
+    header { padding: 16px 18px; }
+    nav { padding: 0 10px; }
+    main { padding: 16px; max-width: 100%; }
+    .grid { grid-template-columns: 1fr; }
+    .two { grid-template-columns: 1fr; }
+    th, td { padding: 10px; }
+    th.rot, td.rot { width: auto; padding: 10px 6px; }
+    .matrix > div { padding: 10px 12px; }
+    /* .hint is a flex row (icon + text); as flex items the text nodes around
+       each <strong> become separate columns on a phone. Stack them back into
+       normal reading order. */
+    .hint { display: block; }
+    .card { padding: 18px; }
+    .form { padding: 18px; }
+    .toast { left: 16px; right: 16px; max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -262,17 +305,15 @@ function renderClients() {
     <p class="hint">A tick = this server is written into this client's config.
        The whole block is <strong>replaced</strong> on every apply: whatever is not ticked disappears from the client.
        Unticking is mainly how you <strong>save context</strong> when you switch to a small local model.</p>
-    <table>
-      <thead><tr><th>Server</th>${clients.map(c => `<th class="rot">${esc(c.label)}</th>`).join('')}</tr></thead>
-      <tbody>${names.map(n => {
+    <div class="table-wrap"><div class="matrix" style="grid-template-columns: minmax(160px, max-content) repeat(${clients.length}, minmax(84px, 1fr))">
+      <div class="mh name cell-name">Server</div>${clients.map(c => `<div class="mh rot">${esc(c.label)}</div>`).join('')}
+      ${names.map(n => {
         const s = state.servers[n];
-        return `<tr>
-          <td class="name">${esc(n)}<span class="tag">${esc(s.transport)}${s.needs_service ? ' · needs ' + esc(s.needs_service) : ''}</span></td>
-          ${clients.map(c => `<td class="rot"><input type="checkbox" data-server="${esc(n)}" data-client="${esc(c.id)}"
-              ${state.matrix[c.id]?.[n] ? 'checked' : ''}></td>`).join('')}
-        </tr>`;
-      }).join('')}</tbody>
-    </table>
+        return `<div class="name cell-name">${esc(n)}<span class="tag">${esc(s.transport)}${s.needs_service ? ' · needs ' + esc(s.needs_service) : ''}</span></div>` +
+          clients.map(c => `<div class="rot"><input type="checkbox" data-server="${esc(n)}" data-client="${esc(c.id)}"
+              ${state.matrix[c.id]?.[n] ? 'checked' : ''}></div>`).join('');
+      }).join('')}
+    </div></div>
     <div class="row">
       <button class="act primary" id="apply-btn">Apply to clients</button>
       <button class="act" id="cancel-apply" hidden>Cancel</button>

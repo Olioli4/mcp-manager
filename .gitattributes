@@ -8,6 +8,7 @@
 # Pinning it here means the answer does not depend on anyone's core.autocrlf.
 
 *.go       text eol=lf
+*.html     text eol=lf
 go.mod     text eol=lf
 go.sum     text eol=lf
 *.md       text eol=lf

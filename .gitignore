@@ -38,3 +38,6 @@ mcp-manager.log
 .idea/
 Thumbs.db
 desktop.ini
+
+# Playwright MCP side-effects when a browser session runs from the repo root.
+.playwright-mcp/
