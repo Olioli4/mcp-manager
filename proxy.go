@@ -14,6 +14,7 @@ package main
 // off. That is the useful half of a hub — without a container.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -349,27 +350,31 @@ func notesText(notes []string) string {
 // Registry
 // ---------------------------------------------------------------------------
 
-// ReloadProxies re-reads the inventory and rebuilds all the proxies. Called at
+// ReloadProxies re-reads the inventory and rebuilds the proxies. Called at
 // startup, and after each edit of the inventory from the interface — this is
 // what makes an added server reachable without a restart.
 //
-// The upstream sessions in progress are closed: a server whose URL we have just
-// changed must not stay connected to the old one.
+// mergeProxies decides what is rebuilt (see it for the rule); only the servers
+// whose definition REALLY changed lose their upstream session. A save that
+// changed nothing else must not disconnect the server the user is talking to:
+// dropping every session on every reload used to cut the live connection, drop
+// the tool cache, and force a reconnect (with a stdio relaunch of npx) for an
+// edit of a completely unrelated server.
 func ReloadProxies(e *Engine) error {
 	inv, err := LoadInventory(InventoryPath())
 	if err != nil {
 		return err
 	}
-	fresh := buildProxies(e, inv)
-
 	old := getProxies()
-	for _, b := range old {
+	next, dropped := mergeProxies(old, buildProxies(e, inv))
+
+	for _, b := range dropped {
 		b.dropSession()
 	}
-	setProxies(fresh)
+	setProxies(next)
 
 	// Warm up newly added servers that have an empty cache.
-	for name, b := range fresh {
+	for name, b := range next {
 		if old[name] == nil {
 			b.mu.Lock()
 			noTools := len(b.tools) == 0
@@ -380,8 +385,56 @@ func ReloadProxies(e *Engine) error {
 		}
 	}
 
-	logf("proxy: %d server(s) exposed", len(fresh))
+	logf("proxy: %d server(s) exposed", len(next))
 	return nil
+}
+
+// mergeProxies is the registry diff, pure: it takes the old registry and the
+// freshly built one, and returns the registry to install plus the backends whose
+// sessions must be closed. No globals, no locks, no side effects — the caller
+// performs every effect. That is what makes the rule testable without an
+// inventory file, an engine, or a network: InventoryPath() is not injectable.
+//
+// The rule, one name at a time:
+//
+//   - new name            -> install the fresh backend (the caller warms it)
+//   - same definition     -> KEEP THE OLD backend: its live session and its tool
+//     cache survive. The definitions are compared as MARSHALLED BYTES of the
+//     spec, so field order, formatting and key order in the file cannot matter,
+//     and a reload after an unrelated edit is a no-op for this server.
+//   - changed definition  -> install the fresh backend, drop the old one's
+//     session: the URL may point elsewhere now, staying connected to the old
+//     target would be answering from the wrong machine.
+//   - name gone from file -> dropped: close its session and remove it.
+func mergeProxies(old, fresh map[string]*backend) (next map[string]*backend, dropped []*backend) {
+	next = make(map[string]*backend, len(fresh))
+	for name, fb := range fresh {
+		ob, existed := old[name]
+		if existed && sameSpec(ob.spec, fb.spec) {
+			next[name] = ob
+			continue
+		}
+		next[name] = fb
+	}
+	// Everything the loop above did not keep — changed, or gone from the file.
+	for name, ob := range old {
+		if next[name] != ob {
+			dropped = append(dropped, ob)
+		}
+	}
+	return next, dropped
+}
+
+// sameSpec compares two server definitions by their marshalled bytes. Marshal
+// sorts map keys, so the comparison is deterministic; a cosmetic change in
+// inventory.json (key order, indentation) never counts as a change.
+func sameSpec(a, b InventoryServer) bool {
+	ja, ea := json.Marshal(a)
+	jb, eb := json.Marshal(b)
+	if ea != nil || eb != nil {
+		return false // unreadable spec: treat as changed, rebuild
+	}
+	return bytes.Equal(ja, jb)
 }
 
 // buildProxies builds one proxy per inventory server (the manager itself

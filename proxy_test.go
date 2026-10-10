@@ -38,6 +38,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -422,5 +423,99 @@ func TestNewServerWithEmptyCacheIsWarmed(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("warm() started the declared service — only an incoming request may start one")
+	}
+}
+
+// M4: a reload must not disconnect what did not change. ReloadProxies reads
+// InventoryPath(), which no test can inject, so the rule is tested where it
+// lives: mergeProxies, with real backends and a sentinel standing in for a live
+// session. The failure this prevents: every save closed EVERY upstream session
+// and cleared every tool cache — editing one server reconnected all the others
+// (and relaunched every stdio npx), for an edit that did not concern them.
+func TestMergeProxiesKeepsTheLiveSessionOfAnUnchangedServer(t *testing.T) {
+	e := newTestEngine(t, filepath.Join(t.TempDir(), "m"))
+
+	live := &mcp.ClientSession{} // sentinel: "this backend holds a live session"
+
+	oldA := newBackend(e, "a", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/a"})
+	oldA.session = live
+	oldB := newBackend(e, "gone", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/gone"})
+	oldD := newBackend(e, "d", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/d"})
+	old := map[string]*backend{"a": oldA, "gone": oldB, "d": oldD}
+
+	freshA := newBackend(e, "a", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/a"})
+	freshD := newBackend(e, "d", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/d-changed"})
+	freshC := newBackend(e, "c", InventoryServer{Transport: "http", URL: "http://127.0.0.1:9/c"})
+	fresh := map[string]*backend{"a": freshA, "d": freshD, "c": freshC}
+
+	next, dropped := mergeProxies(old, fresh)
+
+	if next["a"] != oldA {
+		t.Fatal("an unchanged server was rebuilt: its live session and tool cache are thrown away")
+	}
+	if next["a"].session != live {
+		t.Fatalf("the kept backend lost its session: %v", next["a"].session)
+	}
+	if next["c"] != freshC {
+		t.Fatal("a new server was not installed")
+	}
+	if next["d"] != freshD {
+		t.Fatal("a server whose URL changed must be rebuilt")
+	}
+
+	want := map[*backend]bool{oldB: true, oldD: true} // removed + changed
+	if len(dropped) != 2 {
+		var names []string
+		for _, b := range dropped {
+			names = append(names, b.name)
+		}
+		t.Fatalf("%d backends dropped (%v); want exactly the removed and the changed", len(dropped), names)
+	}
+	for _, b := range dropped {
+		if !want[b] {
+			t.Fatalf("dropped the wrong backend: %s", b.name)
+		}
+	}
+
+	// Pure means pure: the input map must come out untouched.
+	if len(old) != 3 || old["a"] != oldA || old["gone"] != oldB || old["d"] != oldD {
+		t.Fatal("mergeProxies mutated its input")
+	}
+}
+
+// The comparison is the marshalled bytes of the spec, so a file whose keys moved
+// around (the web UI rewrites the whole document on every save) is NOT a change.
+// json.Marshal sorts map keys, which is what makes the byte comparison
+// deterministic; and a semantic difference — "clients" absent (ALL) versus an
+// empty list (NONE) — IS a change and must rebuild. That distinction is the one
+// the apply code documents, so the merge must honour it.
+func TestMergeProxiesComparesSpecsByMeaning(t *testing.T) {
+	e := newTestEngine(t, filepath.Join(t.TempDir(), "m"))
+
+	parse := func(text string) InventoryServer {
+		var s InventoryServer
+		if err := json.Unmarshal([]byte(text), &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	cosmeticA := parse(`{"transport":"http","url":"u","why":"w","clients":["x","y"]}`)
+	cosmeticB := parse(`{ "url": "u", "clients": ["x", "y"], "why": "w", "transport": "http" }`)
+	if !sameSpec(cosmeticA, cosmeticB) {
+		t.Fatal("the same definition written with keys in another order counts as a change")
+	}
+
+	oldAll := newBackend(e, "s", InventoryServer{Transport: "http", URL: "u", Clients: nil})
+	newNone := newBackend(e, "s", InventoryServer{Transport: "http", URL: "u", Clients: []string{}})
+	if sameSpec(oldAll.spec, newNone.spec) {
+		t.Fatal("clients absent (ALL) and clients empty (NONE) are not the same server")
+	}
+
+	next, dropped := mergeProxies(
+		map[string]*backend{"s": oldAll},
+		map[string]*backend{"s": newNone})
+	if next["s"] != newNone || len(dropped) != 1 || dropped[0] != oldAll {
+		t.Fatal("a server whose client list went from ALL to NONE was not rebuilt")
 	}
 }
