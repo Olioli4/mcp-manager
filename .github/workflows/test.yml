@@ -19,9 +19,13 @@ jobs:
     # nobody runs.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to the first major of each that runs on node24. The previous
+      # ones declared "using: node20", which made GitHub annotate EVERY run with
+      # a deprecation warning — harmless today because it silently forces them
+      # onto node24, but a hard failure whenever that shim is removed.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
