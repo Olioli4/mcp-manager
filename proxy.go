@@ -397,12 +397,13 @@ func idleTimeout() time.Duration {
 // warm attempts a connection in the background, to populate the cache without
 // making the user wait.
 //
-// It is NOT called at startup: connecting to the stdio upstreams would launch
-// `npx @playwright/mcp` and `node aas-mcp.js` permanently, when nobody asked for
-// anything. The visibility of the tools comes from the disk cache, not from a
-// permanent connection.
-//
-// mayStart = FALSE: preheating CONNECTS, it does not START anything.
+// ReloadProxies calls it for servers that are new AND have an empty cache (H4) —
+// which includes the first load at startup: until the cache file exists, the
+// tool list of a stdio server can come only from launching it once. That launch
+// is transient by construction: mayStart is false below (warming CONNECTS, it
+// never STARTS a service), the idle timer closes the session minutes later, and
+// the Job Object takes the spawned process with the manager. Tool visibility
+// afterwards comes from the disk cache, not from a permanent connection.
 func (b *backend) warm() {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()

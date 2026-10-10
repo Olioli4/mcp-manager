@@ -47,12 +47,12 @@
 
     "example-stdio": {
       "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "some-mcp-server@latest"],
+      "command": "node",
+      "args": ["path\\to\\your-mcp-server.js"],
       "why": "Example of a server the client launches itself, over stdio.",
       "notes": [
-        "npx is used here because it is the most common; a direct binary works too.",
-        "On Windows some clients cannot launch 'npx' (a .cmd) without a shell — the opencode plugin handles that with command_prefix."
+        "The manager probes a stdio server by launching it ONCE to cache its tools; a placeholder path like this one dies instantly and quietly — nothing is fetched from the network and nothing is left running. Replace it with your real command.",
+        "npx (a .cmd) works as a command too, but some clients on Windows cannot launch it without a shell — the opencode plugin handles that with command_prefix."
       ]
     },
 
