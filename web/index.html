@@ -250,6 +250,22 @@
   <button data-tab="servers">Inventory</button>
 </nav>
 <main>
+  <!-- The manager unreachable is the one failure that leaves no trace today:
+       a 5-second toast and a blank page. This panel is part of <main>, not a
+       toast - the periodic refresh only rebuilds the sections below, so it
+       can never erase the panel, and a successful poll removes it (the
+       manager answered again: the problem is gone). -->
+  <div id="load-error" class="card" hidden>
+    <h3><span class="dot off" role="img" aria-label="stopped"></span>Cannot reach the manager</h3>
+    <p class="why">This page tried <code id="le-endpoint"></code> and failed:
+       <span class="err" id="le-reason"></span></p>
+    <div class="detail">The manager is the program that answers at that address. If it was
+      closed, open it again (the tray icon) and press Retry. A port changed in
+      services.json only takes effect after the manager is restarted.</div>
+    <div class="row">
+      <button class="act primary" id="retry-load">Retry</button>
+    </div>
+  </div>
   <section id="tab-services"></section>
   <section id="tab-clients" hidden></section>
   <section id="tab-servers" hidden></section>
@@ -773,6 +789,10 @@ document.addEventListener('click', async ev => {
       await load();
     } catch (e) { toast(e.message, true); }
   }
+  if (ev.target.closest('#retry-load')) {
+    $('#load-error').hidden = true;
+    load().catch(e => showLoadError(e.message));
+  }
 });
 
 // Enter in any text field of the inventory form submits it: same path as the
@@ -800,6 +820,10 @@ let lastSig = '';
 
 async function refresh(force) {
   const s = await api('/api/state');
+  // The manager answered: any "cannot reach" panel is stale news. Done here,
+  // before the unchanged-signature early return - a restart with identical
+  // data must still clear the panel.
+  $('#load-error').hidden = true;
   const sig = JSON.stringify(s);
   if (!force && sig === lastSig) return;
   lastSig = sig;
@@ -814,8 +838,17 @@ async function refresh(force) {
 
 async function load() { await refresh(true); }
 
-load().catch(e => toast('could not load: ' + e.message, true));
-setInterval(() => refresh(false).catch(() => {}), 5000);
+// Persistent panel for the first-load failure: the toast fades in five
+// seconds, the panel stays until the manager answers again.
+function showLoadError(msg) {
+  const p = $('#load-error');
+  $('#le-endpoint').textContent = location.origin + '/api/state';
+  $('#le-reason').textContent = msg;
+  p.hidden = false;
+}
+
+load().catch(e => showLoadError(e.message));
+setInterval(() => refresh(false).catch(e => showLoadError(e.message)), 5000);
 </script>
 </body>
 </html>
