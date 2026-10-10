@@ -75,6 +75,12 @@ func newBackend(eng *Engine, name string, spec InventoryServer) *backend {
 // rebuildServer rebuilds the local server exposing the known tools.
 // Called every time the list changes. A tool whose upstream is off stays
 // exposed: that is the whole point of the cache.
+//
+// The receiving middleware (the wake gate) is load-bearing: an empty cache
+// means a name the SDK has never seen, and the SDK's own tool dispatch
+// answers -32602 "unknown tool" BEFORE any proxy code runs. Without the
+// gate, a cold server can never be called, never be warmed by a call, and
+// stays unstartable forever — checklist item 4 is exactly that trap.
 func (b *backend) rebuildServer() {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    b.name,
@@ -82,13 +88,88 @@ func (b *backend) rebuildServer() {
 	}, &mcp.ServerOptions{
 		Instructions: b.spec.Why + notesText(b.spec.Notes),
 	})
+	gate := &wakeGate{b: b, s: s, known: map[string]bool{}}
 	for _, t := range b.tools {
 		tool := t
-		s.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return b.forward(ctx, req.Params.Name, req.Params.Arguments)
-		})
+		gate.known[tool.Name] = true
+		s.AddTool(tool, b.callHandler())
 	}
+	s.AddReceivingMiddleware(gate.middleware)
 	b.srv.Store(s)
+}
+
+// callHandler is the handler every exposed tool gets: route by the name in
+// the request, forward. One closure serves all tools — a per-tool capture
+// would only duplicate b.forward's routing inside a loop.
+func (b *backend) callHandler() func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return b.forward(ctx, req.Params.Name, req.Params.Arguments)
+	}
+}
+
+// wakeGate is the receiving middleware in front of one server instance's
+// tool gate. It owns the set of names THAT instance registered at build
+// time (per-server closure, guarded by its own mutex: sessions already open
+// on an older instance keep their gate while rebuildServer publishes a new
+// server).
+type wakeGate struct {
+	b     *backend
+	s     *mcp.Server
+	mu    sync.Mutex // guards known
+	known map[string]bool
+}
+
+// middleware wakes the chain for a tools/call naming something this server
+// instance does not know — and ONLY for calls. A listing passes straight
+// through: tool visibility stays free, driven by the disk cache; a call is
+// the only event allowed to start anything.
+func (g *wakeGate) middleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if method == "tools/call" {
+			if call, ok := req.(*mcp.CallToolRequest); ok && call.Params != nil {
+				g.mu.Lock()
+				known := g.known[call.Params.Name]
+				g.mu.Unlock()
+				if !known {
+					g.wake(ctx)
+				}
+			}
+		}
+		return next(ctx, method, req)
+	}
+}
+
+// wake: the request arrived for a name nobody knew. ensureUpstream runs the
+// whole on-demand chain — start the declared service, connect, list, cache,
+// rebuild the published server — and hands back a BORROWED session, which
+// this is not a call in flight, so it answers with leave(), exactly as warm()
+// does. Then every tool the snapshot now knows gets registered on THIS
+// instance, in front of the gate next() is about to run: the call proceeds
+// through the normal forward path, and the client sees a real result instead
+// of -32602. If waking fails (the service will not come up), nothing is
+// registered and the SDK's gate answers the name plainly — "unknown tool" is
+// honest about a server that never revealed its tools.
+func (g *wakeGate) wake(ctx context.Context) {
+	sess, err := g.b.ensureUpstream(ctx, true)
+	if err != nil {
+		return
+	}
+	g.b.leave()
+	_ = sess
+
+	g.b.mu.Lock()
+	snapshot := append([]*mcp.Tool(nil), g.b.tools...)
+	g.b.mu.Unlock()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	handler := g.b.callHandler()
+	for _, t := range snapshot {
+		if !g.known[t.Name] {
+			g.s.AddTool(t, handler)
+			g.known[t.Name] = true
+		}
+	}
 }
 
 // ensureUpstream makes sure the upstream is reachable — and this is THE point

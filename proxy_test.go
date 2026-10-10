@@ -611,3 +611,148 @@ func TestHeaderRoundTripperStampsRequests(t *testing.T) {
 		t.Fatal("the RoundTripper modified the request it was handed (contract: work on a clone)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The cold-cache gate (checklist item 4)
+// ---------------------------------------------------------------------------
+
+// newStartableEngine is newTestEngine's sibling for tests that must really wake a
+// service up: service "starter" is STOPPED and CAN start. Engine.Start waits for
+// the probe to turn green, and a port-1 probe never does. Here the start runs
+// ping.exe (the probe: the process exists) after writing the marker first.
+// The probe is by PROCESS NAME, machine-wide: a stray interactive ping from
+// OUTSIDE the test would read "service already up" and short-circuit Start —
+// tests never run pings, CI has no interactive user, so this is stable where
+// it runs.
+func newStartableEngine(t *testing.T, marker string) *Engine {
+	manifest := `{
+  "settings": {"web_port": 8787, "default_probe_timeout_s": 20, "poll_seconds": 5},
+  "services": [{
+    "id": "starter",
+    "label": "Starter",
+    "why": "runs ping.exe for 30 s and leaves the marker file",
+    "start": {"exe": "cmd.exe", "args": ["/c", "echo x > ` + filepath.ToSlash(marker) + ` & ping -n 30 127.0.0.1"]},
+    "stop": {"process": "ping.exe"},
+    "probe": {"process": "ping.exe"}
+  }]
+}`
+	path := filepath.Join(t.TempDir(), "services.json")
+	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := LoadEngine(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// serveBackend connects a real MCP client to the backend's own handler — the same
+// handler :8787 mounts at /mcp/<name>. Returns the session and its teardown.
+func serveBackend(t *testing.T, b *backend) (*mcp.ClientSession, func()) {
+	t.Helper()
+	ts := httptest.NewServer(b.handler)
+	cli := mcp.NewClient(&mcp.Implementation{Name: "cold-call-client", Version: "test"}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	sess, err := cli.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		cancel()
+		ts.CloseClientConnections()
+		t.Fatal(err)
+	}
+	return sess, func() { sess.Close(); cancel(); ts.CloseClientConnections() }
+}
+
+// Checklist item 4. The server is COLD: empty cache — it was never warmed,
+// because warming must never start a service — and its service is off. The tool
+// call is the one event allowed to wake the chain: request arrives, service
+// starts, call forwards. The trap this pins: the SDK tool gate answers -32602
+// "unknown tool" for a name the cache never saw, BEFORE any proxy code runs —
+// so a cold server cannot be called, cannot be warmed by a call, and would stay
+// unstartable forever. The wake-up lives in receiving middleware (see
+// rebuildServer), in front of that gate.
+func TestCallOnColdCacheStartsTheServiceAndForwards(t *testing.T) {
+	url, stop := startUpstream(t)
+	defer stop()
+
+	marker := filepath.Join(t.TempDir(), "starter-started.marker")
+	if strings.Contains(marker, " ") {
+		t.Skip("fixture echo writes to a quoteless path — a tempdir with spaces would need cmd quoting games")
+	}
+	e := newStartableEngine(t, marker)
+	b := newBackend(e, "cold-call-test", InventoryServer{Transport: "http", URL: url, NeedsService: "starter"})
+	if len(b.tools) != 0 {
+		t.Fatal("this test needs a backend with an empty cache")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the service is up at test start — the cold case is not being tested")
+	}
+
+	sess, done := serveBackend(t, b)
+	defer done()
+
+	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: "ping"})
+	if err != nil {
+		t.Fatalf("cold call rejected: %v — the tool gate must wake the chain, not refuse the name", err)
+	}
+	if res.IsError || len(res.Content) == 0 {
+		t.Fatalf("cold call did not forward: %+v", res)
+	}
+	if txt, isText := res.Content[0].(*mcp.TextContent); !isText || txt.Text != "PONG" {
+		t.Fatalf("the call did not reach the upstream: %+v", res.Content[0])
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("a request arrived at a gated server and its service was NOT started")
+	}
+	if n := inflight(b); n != 0 {
+		t.Fatalf("the cold call leaked a borrow: inFlight=%d", n)
+	}
+
+	// The tools the call discovered must now be VISIBLE on this same session —
+	// a client that discovers by listing must see what it just called.
+	lt, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lt.Tools) == 0 {
+		t.Fatal("after the wake-up, this session lists no tools")
+	}
+
+	if _, err := e.Stop("starter"); err != nil {
+		t.Fatalf("stopping the fixture service: %v", err)
+	}
+}
+
+// The pair of the rule: waking is for CALLS only. tools/list answers from the
+// disk cache; a listing on a cold server stays empty, connects nothing and
+// starts nothing — otherwise opening the UI would launch every npx on the
+// machine, which is the exact behaviour the user refused.
+func TestToolsListOnColdCacheStartsNothing(t *testing.T) {
+	url, stop := startUpstream(t)
+	defer stop()
+
+	marker := filepath.Join(t.TempDir(), "starter-started.marker")
+	if strings.Contains(marker, " ") {
+		t.Skip("fixture echo writes to a quoteless path — a tempdir with spaces would need cmd quoting games")
+	}
+	e := newStartableEngine(t, marker)
+	b := newBackend(e, "cold-list-test", InventoryServer{Transport: "http", URL: url, NeedsService: "starter"})
+
+	sess, done := serveBackend(t, b)
+	defer done()
+
+	lt, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lt.Tools) != 0 {
+		t.Fatalf("cold list returned %d tools — visibility must come from the cache alone", len(lt.Tools))
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("tools/list started the declared service — only a call may wake anything")
+	}
+	if st := b.state(); st.Connected {
+		t.Fatal("tools/list connected upstream — listing must stay free")
+	}
+}
