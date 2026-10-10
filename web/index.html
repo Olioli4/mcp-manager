@@ -76,6 +76,12 @@
   nav button:hover { color: var(--fg); }
   nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
   main { padding: 32px; max-width: 1200px; margin: 0 auto; min-height: 80vh; }
+  /* Load-bearing rule: .card below sets display:flex, and an author 'display'
+     on the element beats the browser's built-in [hidden]{display:none}. So a
+     hidden CARD — the "cannot reach the manager" panel — was VISIBLE on every
+     load, with empty fields, forever. Without this rule the hidden attribute
+     is a lie for any element whose class sets display. */
+  [hidden] { display: none !important; }
   .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
   .card { 
     background: var(--panel); 
