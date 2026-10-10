@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -76,6 +77,11 @@ type Manifest struct {
 type Engine struct {
 	man  atomic.Pointer[Manifest]
 	Path string
+
+	// startMu guards startLocks, the per-service launch locks. The locks
+	// themselves are never copied: a *sync.Mutex per service id.
+	startMu    sync.Mutex
+	startLocks map[string]*sync.Mutex
 }
 
 // Manifest returns the current manifest.
@@ -229,12 +235,44 @@ func probeProcess(name string) (bool, string) {
 // Start / stop
 // ---------------------------------------------------------------------------
 
+// serviceLock returns the launch lock dedicated to one service id.
+//
+// Why a lock per service and not one for all: starting Blender must not block
+// starting ComfyUI, and the two are exactly the case where a global lock would be
+// felt. The map is small (the manifest has a dozen services) and grows once per
+// id, under startMu.
+func (e *Engine) serviceLock(id string) *sync.Mutex {
+	e.startMu.Lock()
+	defer e.startMu.Unlock()
+	if e.startLocks == nil {
+		e.startLocks = map[string]*sync.Mutex{}
+	}
+	mu, ok := e.startLocks[id]
+	if !ok {
+		mu = &sync.Mutex{}
+		e.startLocks[id] = mu
+	}
+	return mu
+}
+
 // Start launches the service and waits for its probe to turn green.
+//
+// One launch at a time per service, and the probe is REPEATED inside that lock:
+// two requests for the same service — the tray button and an incoming proxy
+// request, or two proxy requests arriving together — both probe "off" a moment
+// before launching, and without the lock both launch. That is ComfyUI twice,
+// Chrome twice, on the user's desktop. Whoever arrives second re-probes, sees the
+// first one's launch, and reports the service as running (or waits for it)
+// instead of starting a second copy.
 func (e *Engine) Start(id string) (string, error) {
 	s, err := e.Find(id)
 	if err != nil {
 		return "", err
 	}
+
+	mu := e.serviceLock(id)
+	mu.Lock()
+	defer mu.Unlock()
 
 	if running, detail := e.Probe(s); running {
 		return fmt.Sprintf("%s is already running — %s", s.Label, detail), nil
@@ -267,6 +305,11 @@ func (e *Engine) Start(id string) (string, error) {
 
 // Stop stops the service and waits for its probe to turn red.
 //
+// It takes the same per-service lock as Start: a stop that lands in the middle of
+// a launch is the same two-writers problem in the other direction — we kill what
+// was only half started, the launch reports its own program as running, and the
+// user is left with processes no button reaches.
+//
 // It attempts the stop EVEN IF the probe already says "stopped", and that is
 // essential: a half-started program has processes not listening yet. The HTTP
 // probe does not see them, so the old version answered "already stopped" while
@@ -276,6 +319,10 @@ func (e *Engine) Stop(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	mu := e.serviceLock(id)
+	mu.Lock()
+	defer mu.Unlock()
 
 	running, detail := e.Probe(s)
 
