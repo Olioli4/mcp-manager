@@ -18,7 +18,17 @@ import (
 func runResident(e *Engine) {
 	// systray.Run blocks and must hold the main thread: it is the one that owns
 	// the Windows message loop.
-	systray.Run(func() { trayReady(e) }, func() {})
+	//
+	// onExit was empty (M9): the upstream sessions were never closed, so a
+	// clean quit left the stdio children (npx, node) attached to pipes of a
+	// dead process. CloseAll makes each upstream leave politely (its stdin
+	// gets EOF); for the ones that ignore it, the Job Object in
+	// job_windows.go is the backstop: the kernel kills every child the moment
+	// the manager's handle to the job closes, which the exit itself does.
+	systray.Run(func() { trayReady(e) }, func() {
+		logf("manager exiting: closing upstream sessions")
+		CloseAll()
+	})
 }
 
 // svcMenu groups a service's menu entries.

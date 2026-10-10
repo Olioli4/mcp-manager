@@ -195,9 +195,12 @@ func (b *backend) connect(ctx context.Context) (*mcp.ClientSession, error) {
 			HideWindow:    true,
 			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 		}
-		return cli.Connect(cctx, &mcp.CommandTransport{
+		// jobbedTransport assigns the child to the kill-on-exit Job Object
+		// (job_windows.go, M9) the instant its PID exists: when the manager
+		// exits, the kernel kills npx, node, and everything they spawned.
+		return cli.Connect(cctx, jobbedTransport{&mcp.CommandTransport{
 			Command: cmd,
-		}, nil)
+		}}, nil)
 	default:
 		return nil, fmt.Errorf("unknown transport %q", b.spec.Transport)
 	}
