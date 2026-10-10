@@ -235,6 +235,7 @@ func (e *Engine) Start(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if running, detail := e.Probe(s); running {
 		return fmt.Sprintf("%s is already running — %s", s.Label, detail), nil
 	}
@@ -347,9 +348,22 @@ func waitProcessesGone(name, match string, d time.Duration) bool {
 func (e *Engine) launch(a Action) error {
 	switch {
 	case a.Exe != "":
-		// Detached: the program must survive our own exit.
+		// Detached: the program must survive our own exit — but NOT via
+		// DETACHED_PROCESS (0x8). Measured on this machine, three runs each:
+		// powershell.exe launched with DETACHED_PROCESS does not run at all, and
+		// fails SILENTLY — Start returns no error, the program is simply never
+		// there. A console program given no console dies during its own startup,
+		// so the tray reported "started" for a program that never existed.
+		//
+		// CREATE_NO_WINDOW is what we actually wanted in the first place: the
+		// console exists (console programs accept it, measured ran=true) but is
+		// never shown, and HideWindow covers the window cmd.exe-style launchers
+		// create before their flag applies. The program still outlives us.
 		cmd := exec.Command(a.Exe, a.Args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000008} // DETACHED_PROCESS
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+			HideWindow:    true,
+		}
 		if err := cmd.Start(); err != nil {
 			return err
 		}
