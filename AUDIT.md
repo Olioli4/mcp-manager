@@ -1,4 +1,9 @@
-# Adversarial audit — 2026-10-09
+# Adversarial audit
+
+Two rounds. **Round 2 (2026-10-10)** is at the end: it audits the four commits that landed after
+Phase 6, and re-checks that round 1's fixes still hold.
+
+## Round 1 — 2026-10-09
 
 Done before making this public, on the assumption that publishing means other people's config files
 and other people's machines.
@@ -265,3 +270,137 @@ have to re-test after any change.
 
 Everything else is real but survivable. Items L1–L2 are worth doing alongside (1) because they are
 the same three lines of code.
+
+---
+
+# Round 2 — the four commits after Phase 6 · 2026-10-10
+
+`9298b1f..ecc8ab7`. Four commits, and the shape of them is the story: **three fix defects the coder
+introduced itself.**
+
+| commit | what it fixed | introduced by |
+|---|---|---|
+| `2080f03` | every new session stalled **30 s** | its own Phase 6 keepalive |
+| `53909f1` | a cold server could never be called (`-32602`) | the cache design |
+| `ecc8ab7` | its error panel showed on **every** page load | Phase 3.3 |
+| `f6dfba9` | first boot contacted the npm registry | the shipped example |
+
+That is the right way round — it found these by *running* things (a checklist, screenshots, a real
+client), not by re-reading its own code. But three self-inflicted regressions in one phase is a
+statement about the phase.
+
+**Method.** I read the entire diff myself rather than fanning out agents: 288 lines over six files,
+and the value is one reader holding the whole picture. Everything below marked *executed* was run.
+
+---
+
+## Verified by execution
+
+| Claim | How it was established | Result |
+|---|---|---|
+| the suite is green and silent | `gofmt -l` · `go vet` · `go build` · `go test -count=1 ./...` | clean; `ok 30.160s`, **no trailing warnings** |
+| the wake gate is load-bearing | **mutation**: removed `AddReceivingMiddleware` | test fails — `calling "tools/call": unknown tool "ping"`. Reverted → passes 3.18 s |
+| the `Flush` shape is load-bearing | **mutation**: restored `Flush() error` | test fails at **30.01 s** — `context deadline exceeded`. Reverted → passes 0.891 s |
+| round 1's security fix survived | replayed the four vectors against the live server | cross-origin POST **403**, rebinding Host **403**, loopback GET **200**, loopback Origin **200**, no marker file |
+| `[hidden]` beats `.card{display:flex}` | live page, 380/768/1280 | `#load-error` computed `display: none` at all three, `hidden` attribute intact |
+| the matrix is usable at 380 px | live page | CSS-grid `div.matrix`, **6 sticky `div.cell-name` at `left: 0`**, inside a `.table-wrap` scrolling 496→348. No page-level overflow at any width |
+| the editor is a real `<form>` | live page, editor opened | `<form id="server-form">`, 12 id'd fields, **all 12 labelled** (10 explicit `label[for]`, 2 checkboxes wrapped in their own `<label>`), 1 submit button |
+| keyboard focus is visible | real `Tab` keypress on the live page | outline `solid 1.92px` on the focused button |
+| ARIA survived | live page | 3 live regions: `#toast` (`role=status`, `aria-live`), `#report` (`aria-live=polite`), status dots (`role=img` + `aria-label`) |
+
+The `Flush` diagnosis is exactly right, and I checked it against Go itself: `ResponseController.Flush`
+matches `interface{ FlushError() error }`, then `http.Flusher` — `Flush()` with **no** error — and
+only then `Unwrap`. `Flush() error` matched none of them, so the call became `ErrNotSupported`, the
+SDK ignored it, and the stream's headers sat in `net/http`'s buffer until the first ping. The
+*absence* of `Unwrap` is documented as the `-race`-proven hazard it is, not as a style choice.
+
+---
+
+## Findings
+
+### F1 — the wake gate gives a hallucinated tool name a side effect
+
+A `tools/call` naming something the instance does not know now runs
+`ensureUpstream(ctx, mayStart=true)`. For a stdio upstream that **launches the process**; for a
+`needs_service` upstream it **starts the service and waits for its probe**. If the name is then still
+unknown, the SDK answers `-32602` exactly as before.
+
+Before: an instant, free refusal. Now: a service-start attempt (up to the manifest timeout) and, for
+stdio, a launch/kill cycle — on every call naming a tool that does not exist. Agent loops hallucinate
+tool names; this turns a typo into work on the machine.
+
+Not a security finding — the proxy is loopback-only and a *known* call already starts the same
+service, so no new authority is granted. It is an ergonomics one. Cheapest fix: remember per instance
+that a name was already woken for and still unknown, so the second bogus name is instant again.
+
+### F2 — the first-boot fix closes the shipped case, not the class
+
+`f6dfba9`'s own message is the evidence: a fresh extraction *seeded, warmed, and contacted the npm
+registry*. The cure was to make the **example** inert. Warming is unchanged — `ReloadProxies` still
+calls `warm()` for a new server with an empty cache, first load included, and warming a stdio server
+means launching it. A user who replaces the placeholder with a real `npx -y @their/server@latest`
+gets the same registry fetch on the next boot.
+
+"First boot must not touch the network" is currently a property of the **sample file**, not of the
+**program**. The wake gate now makes the alternative possible: let the first load skip warming and
+let the first real call pay the connect. Worth deciding deliberately rather than by sample edit.
+
+Related: `warm()`'s corrected comment now admits startup launches stdio upstreams when the cache is
+empty. The rule — *only an incoming request may start a service, never a timer, never a startup* — is
+the spine of this project, and it now has an exception recorded only in a comment in `proxy.go`. The
+exception may well be right; it should be written down where the rule is written down.
+
+---
+
+## Gaps — claims that are not currently testable, or silently untested
+
+- **G1 — two of the new tests can silently skip.** Both cold-cache tests `t.Skip` when the temp path
+  contains a space (`fixture echo writes to a quoteless path`). On a profile like
+  `C:\Users\John Smith\…` they **never run**, and `go test` still prints `ok`. A behaviour claim that
+  quietly stops being tested depending on whose machine runs it is worse than an absent test. Fix by
+  writing the marker from Go rather than through `cmd echo`, which removes the need for the skip.
+- **G2 — the wake gate's failure path is untested.** The comment promises *"if waking fails, nothing
+  is registered and the SDK's gate answers the name plainly"*. No test covers a service that refuses
+  to start — the error path of a brand-new mechanism, where they most often break.
+- **G3 — running the suite kills every `ping.exe` on the machine.** `newStartableEngine` probes and
+  stops by process name, machine-wide (established by reading the fixture, not by execution), so
+  `go test` will kill a `ping -t` the user happens to be running. The author documented it; it is
+  still a side effect of the test suite on the real box.
+
+---
+
+## Not established — and three guesses of mine that measurement killed
+
+Recorded because a negative result is a result, and because the next auditor will make the same
+guesses.
+
+- **A Playwright click on the nav timed out once** (30 s, "waiting for element to be visible, enabled
+  and stable"), even though `elementFromPoint` returned the button itself with `pointer-events: auto`
+  and nothing over it. **I could not reproduce a cause, and the evidence points away from the page:**
+  the button's box was byte-identical across four samples over 2.7 s, `document.getAnimations()`
+  showed nothing running, and the node survived 9 s — two poll ticks — as the same node, never
+  replaced. Recorded as unexplained, not as a defect.
+- **Three of my own first-pass UI numbers were false negatives**, each from an assumption rather than
+  from the page: `tables: 0` (I assumed `<table>`; it is a CSS grid of divs), `stickyFirstCol: null`
+  (I looked for `th`; the sticky cells are `div.cell-name`), `realForm: false` (the editor is not in
+  the DOM until it is opened), and `outline-style: none` (I used programmatic `.focus()`, which does
+  **not** set `:focus-visible` — only a real keypress does). Every one of these inverted on a proper
+  measurement. Nothing in this round's findings survived on a single reading.
+
+---
+
+## What I would fix, in order
+
+1. **G1** — the silent skip costs the suite its teeth on some machines, and the fix is a few lines
+   (write the marker from Go).
+2. **G2** — test the wake gate's failure path; it is the one branch of the new mechanism nobody has
+   seen run.
+3. **F1** — the bogus-name side effect. Small, and it is the difference between a typo being free and
+   a typo starting a service.
+4. **F2** — decide the first-boot invariant deliberately, and write the `warm()` exception down
+   beside the rule it bends.
+5. **G3** — test hygiene: scope the fixture's process name so the suite cannot kill a stranger's.
+
+Round 1's deferred list is unchanged and still stands: the systray data race, PowerShell
+interpolation in `killProcess`/`countProcesses`, log rotation, symlink resolution before atomic
+replace, backup rotation, the preview-diff hash, and `forward`'s missing timeout of its own.
