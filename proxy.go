@@ -49,7 +49,7 @@ type backend struct {
 	mu      sync.Mutex // held only for fast state updates
 	session *mcp.ClientSession
 	tools   []*mcp.Tool // last known — the cache
-	handler *mcp.StreamableHTTPHandler
+	handler http.Handler
 	lastErr string
 
 	// Lifecycle: we do NOT keep the upstream connected permanently. Connection on
@@ -66,8 +66,9 @@ func newBackend(eng *Engine, name string, spec InventoryServer) *backend {
 	// and therefore without launching a single process.
 	b.tools = loadToolCache(name)
 	b.rebuildServer()
-	b.handler = mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return b.srv.Load() }, nil)
+	// keepaliveHandler: the SDK alone would let an idle GET stream fall silent,
+	// and clients time it out (Phase 6 — see sse.go).
+	b.handler = keepaliveHandler(func(*http.Request) *mcp.Server { return b.srv.Load() })
 	return b
 }
 

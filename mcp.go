@@ -162,9 +162,7 @@ func textResult(s string) *mcp.CallToolResult {
 // the network since the server listens only on the loopback.
 func mcpHTTPHandler(e *Engine) http.Handler {
 	srv := newMCPServer(e)
-	return mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv }, nil,
-	)
+	return keepaliveHandler(func(*http.Request) *mcp.Server { return srv })
 }
 
 // errResult returns an EXPLICIT error to the model, not a transport failure: the
