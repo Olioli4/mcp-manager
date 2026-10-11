@@ -52,15 +52,18 @@ func trayReady(e *Engine) {
 	if url != "" {
 		logf("web interface: %s", url)
 	}
-	open := systray.AddMenuItem("Open the configuration…", url)
+	open := systray.AddMenuItem("Open the dashboard", url)
 	systray.AddSeparator()
 
-	// One submenu per service: State / Start / Stop.
+	// One submenu per service: State / Start / Stop — all nested under a
+	// single top-level "Services" item, so the menu stays four lines wide
+	// no matter how many services the manifest declares.
+	services := systray.AddMenuItem("Services", "start or stop the host programs")
 	menus := map[string]*svcMenu{}
 	man := e.Manifest()
 	for i := range man.Services {
 		s := man.Services[i]
-		parent := systray.AddMenuItem(s.Label, s.Why)
+		parent := services.AddSubMenuItem(s.Label, s.Why)
 		state := parent.AddSubMenuItem("state: ?", "")
 		state.Disable()
 		start := parent.AddSubMenuItem("Start", "")
@@ -69,8 +72,10 @@ func trayReady(e *Engine) {
 	}
 
 	systray.AddSeparator()
-	refresh := systray.AddMenuItem("Refresh", "re-read the state of the services")
-	trayLog := systray.AddMenuItem("Open the log", "mcp-manager.log next to the executable")
+	auto := systray.AddMenuItem("Start with Windows", "launch the manager when you sign in")
+	if autostartEnabled() {
+		auto.Check()
+	}
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "stop the manager (does not touch the services)")
 
@@ -100,13 +105,16 @@ func trayReady(e *Engine) {
 		}()
 	}
 	go func() {
-		for range refresh.ClickedCh {
-			refreshAll(e, menus)
-		}
-	}()
-	go func() {
-		for range trayLog.ClickedCh {
-			openLog()
+		for range auto.ClickedCh {
+			if err := setAutostart(!autostartEnabled()); err != nil {
+				logf("autostart toggle: %v", err)
+				continue
+			}
+			if autostartEnabled() {
+				auto.Check()
+			} else {
+				auto.Uncheck()
+			}
 		}
 	}()
 	go func() {
@@ -219,13 +227,6 @@ func logf(format string, args ...any) {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s  %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
-}
-
-func openLog() {
-	p := logPath()
-	// We do not want to depend on an external program: we try Notepad, which is
-	// present everywhere on Windows.
-	_ = exec_detached("notepad.exe", p)
 }
 
 // ---------------------------------------------------------------------------

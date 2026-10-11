@@ -42,7 +42,7 @@ go build -o mcp-manager-tray.exe -ldflags "-H=windowsgui" .
 mcp-manager-tray.exe            # tray icon; brings up the web UI on 127.0.0.1:8787
 ```
 
-Then right-click the tray icon → **Open the configuration…**
+Then right-click the tray icon → **Open the dashboard**
 
 ![The Services tab: every program probed live, with why it exists and how to start it](./docs/services.png)
 

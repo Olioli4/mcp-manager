@@ -209,7 +209,7 @@ PLAN.md           this file
   litter.
 - [x] **W1+W2 — local web UI.** `web.go` serves an embedded page (`web/index.html`, `go:embed`) on
   `127.0.0.1:8787` — loopback only, nothing on the network. No framework, no build step: one binary.
-  Tray item **"Open the configuration…"** opens it.
+  Tray item **"Open the dashboard"** opens it.
   - **Services tab** — live probe per service, with *why*, *notes* and start/stop. Verified by
     rendering the page with headless Chrome and reading the screenshot: dots and button states match
     each service's real state.
