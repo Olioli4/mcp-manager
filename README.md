@@ -75,10 +75,21 @@ mcp-manager.exe list           # the host programs and their live state
 mcp-manager.exe start <id>     # start one, wait for its probe
 mcp-manager.exe apply          # DRY RUN — shows exactly what would be written, changes nothing
 mcp-manager.exe apply --write  # writes it, after a timestamped backup
+mcp-manager.exe import         # DRY RUN — the servers your clients already have, that the inventory lacks
+mcp-manager.exe import --write # adds them to inventory.json, after a timestamped backup
 ```
 
 `apply` without `--write` is the one to reach for first: it prints the exact JSON block per client
 (or the exact HTTP calls, for a client configured over an API) and touches nothing.
+
+`import` is its mirror, for the other direction. A first `apply` replaces each client's MCP block with
+the inventory, so anything you had configured **before** the manager existed would be lost — `import`
+reads what your clients already hold and offers it as inventory entries. It recognises the manager's
+own entries (the proxy base and everything routed through it) and skips them, so you only ever see
+genuinely foreign servers. A name that already exists in the inventory is reported and **never**
+overwritten: the inventory is the source of truth. Add `--write` to add the new ones; fill in each
+server's `why` afterwards — that field is the first thing an agent reads, and a client's config has
+nowhere to keep it.
 
 ---
 

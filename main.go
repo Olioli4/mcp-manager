@@ -26,6 +26,8 @@ const usage = `mcp-manager — the machine's concierge
   mcp-manager stop <id>       stops it and waits for it to be gone
   mcp-manager apply           shows what would be written for each client (touches nothing)
   mcp-manager apply --write   writes it, after a timestamped backup
+  mcp-manager import          shows the servers the clients already have that the inventory lacks (touches nothing)
+  mcp-manager import --write  adds them to inventory.json, after a timestamped backup
   mcp-manager reload          re-reads services.json live (resident mode)
 
   Extension happens in services.json, inventory.json and plugins/ — never here.
@@ -82,6 +84,16 @@ func main() {
 			}
 		}
 		if err := cmdApply(inv, write); err != nil {
+			fail(err.Error())
+		}
+	case "import":
+		write := false
+		for _, a := range args[1:] {
+			if a == "--write" || a == "-w" {
+				write = true
+			}
+		}
+		if err := cmdImport(write); err != nil {
 			fail(err.Error())
 		}
 	case "help", "-h", "--help":
