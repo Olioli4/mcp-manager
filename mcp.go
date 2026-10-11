@@ -32,8 +32,8 @@ const systemInstructions = "Manager of this machine's programs. " +
 	"A tool call starts what it needs: if a service is STOPPED, use the tool anyway — " +
 	"the manager starts the service for you; \"down\" does not mean \"unavailable\". " +
 	"You do not need to start anything yourself; use service_start only if a tool call " +
-	"actually fails. Exception: Blender is not auto-started (it opens a window) — " +
-	"open the real Blender yourself, never a headless instance. " +
+	"actually fails. Blender is started on first use too (it opens a window) — " +
+	"never fall back to a headless instance; the Blender tools live inside the visible Blender. " +
 	"services_list says what is running and why; service_stop stops a program."
 
 func newMCPServer(e *Engine) *mcp.Server {
