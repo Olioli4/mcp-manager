@@ -272,64 +272,6 @@ models*; the DCC gateway is the closest existing evidence, and it costs the agen
 
 ---
 
-### 11 · The comfyui / Blender separation
-
-**The idea.** The `dcc` server fronts two different backends — ComfyUI and Blender — behind one
-entry, but the manager's model is one `needs_service` per server, and it points only at ComfyUI. The
-two halves are conflated.
-
-**My read.** ComfyUI and Blender have opposite start semantics. ComfyUI starts quietly on demand (the
-wake-gate launches it and the probe turns green). Blender does not: the Blender adapter lives *inside*
-Blender, so "Blender is available" means "Blender is already open" — and starting it opens a window,
-not a quiet launch. One `dcc` entry cannot express "image tools need ComfyUI; 3D tools need Blender
-(and Blender cannot be auto-started)". This is the same root as #12: the agent cannot tell which half
-needs what, and for Blender the answer is "you open it yourself".
-
-Three shapes, undecided:
-
-```
-split      two `dcc` entries (one per backend) — but it is one elected gateway, and the 4
-           meta-tools (search/describe/load_skill/call) are shared
-per-tool   `needs_service` at tool granularity — the same change #6 needs
-document   accept Blender as the exception, and say so plainly on the surface
-```
-
-**Verdict: discuss** — decide the model alongside #12 and #6, which meet at the same per-tool
-granularity.
-
----
-
-### 12 · Using a tool must visibly mean "start it" — agents are too shy to use a down server
-
-**The idea.** Agents look at the server list, see a service STOPPED, and shy away — it is not clear
-that *using = starting*. Observed twice in a parallel window: playwright was avoided because it
-looked down; Blender went worse — the agent launched a *headless* Blender instead of using the
-visible one.
-
-**My read.** The most important issue on this page, because the concierge's whole premise — "a tool
-call starts what it needs" — is invisible to the agent that should be using it. The mechanism already
-works (the wake-gate starts `needs_service` on the first call), but nothing says so. `servers_list`
-reports `requires "chrome-cdp": STOPPED`, and the agent reads that as *unavailable*, then either
-avoids the tool or works around it — like a headless Blender, which is precisely wrong, because the
-Blender tools live inside the visible Blender.
-
-The fix is communication, not mechanism:
-
-```
-servers_list   per server: "STOPPED — starts automatically on first use; just call the tool",
-               and for Blender: "not auto-started: open Blender yourself — do NOT fall back
-               to a headless instance"
-instructions   the `system` server states the invariant in one line, read once at startup
-```
-
-**Cost.** Small — a wording change in `servers_list` output and the `system` instructions. The real
-cost is verifying it: watch an agent actually *use* a down tool instead of avoiding it.
-
-**Verdict: do** — cheap, and it fixes the single biggest source of agent confusion. The proof is
-behavioural, not compile-time: a real agent, shown a STOPPED server, must reach for the tool.
-
----
-
 ## Settled
 
 ### 1 · Verbose, useless error messages
@@ -352,6 +294,16 @@ writing `mcp-manager.log` (the tray's only trace). A log view stays `discuss`. D
 **Decided: do** — "Start with Windows" checkbox via the HKCU `Run` key (per-user, no admin); value is
 the quoted tray exe path, no args. Done in `9c4661e`. This is D8's idea, via the Run key rather than
 a scheduled task.
+
+### 11 · The comfyui / Blender separation
+**Decided: split** — `dcc` became `dcc-comfyui` (needs comfyui) and `dcc-blender` (needs blender),
+each auto-starting its own host app on first use. Done 2026-10-11: instruction `0668aad`; the split
+itself is in `inventory.json` (machine-specific).
+
+### 12 · Using a tool must visibly mean "start it"
+**Decided: do** — rewrote the `system` instructions around "a tool call starts what it needs" and made
+`servers_list` say "starts automatically on first use" on a stopped prerequisite. Done 2026-10-11
+(`125b6c3`).
 
 ## Dropped
 
