@@ -186,7 +186,7 @@ func probeHTTP(p Probe) (bool, string) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(p.HTTP)
 	if err != nil {
-		return false, fmt.Sprintf("no response on %s (%v)", p.HTTP, firstLine(err.Error()))
+		return false, fmt.Sprintf("no response on %s", p.HTTP)
 	}
 	defer resp.Body.Close()
 	expect := p.Expect

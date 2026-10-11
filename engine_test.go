@@ -274,3 +274,26 @@ func TestPresentMsgSurvivesShortTasklistRows(t *testing.T) {
 		t.Errorf("a row without a pid column must say 'pid ?', got: %s", short)
 	}
 }
+
+// The probe's error detail reaches EVERY surface — the Services cards, the
+// CLI, the tray labels, the web API, the apply report, the services_list MCP
+// tool — so a stopped service used to print the whole *url.Error wall
+// ("dial tcp … connectex: No connection could be made …") in all of them.
+// The detail must be the short, stable form the other probes use; the raw
+// dial error is neither actionable nor worth re-printing every 5 s poll.
+func TestProbeHTTPReportsShortNotVerbose(t *testing.T) {
+	// A closed loopback port refuses immediately: fast, despite the 5 s
+	// client timeout inside probeHTTP.
+	url := fmt.Sprintf("http://127.0.0.1:%d/json/version", freePort(t))
+
+	running, detail := probeHTTP(Probe{HTTP: url})
+	if running {
+		t.Fatalf("nothing listens on this port, yet probeHTTP says running (%q)", detail)
+	}
+	if want := "no response on " + url; detail != want {
+		t.Errorf("detail = %q\nwant      = %q\n(the verbose dial error must not reach the UIs)", detail, want)
+	}
+	if strings.Contains(detail, "dial tcp") || strings.Contains(detail, "connectex") {
+		t.Errorf("the connectex wall leaked into the probe detail: %q", detail)
+	}
+}
