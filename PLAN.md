@@ -279,6 +279,10 @@ PLAN.md           this file
   We already preserve `inputs` (we write only the `servers` key). Worth designing around.
 - [ ] **D8 — launch at logon** via a scheduled task **in the user's session** (NOT a Windows service —
   session 0 has no desktop, so a service could never open Chrome or ComfyUI).
+- [x] **Tray + error batch** — the five small `do` items from `BRAINSTORM.md` (#1 short probe error,
+  #2 one `Services` submenu, #7 start-with-Windows, #3 "Open the dashboard", #4 drop the log item).
+  Done by a coding agent from `CODING_PLAN.md`; adversarially audited clean. #7 is D8's idea, via the
+  HKCU Run key rather than a scheduled task.
 
 ## Known wrinkle
 
