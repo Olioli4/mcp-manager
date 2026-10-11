@@ -22,16 +22,26 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// systemInstructions is the first thing an agent reads when it connects to the
+// manager's own MCP surface. It states the concierge's one invariant — a tool
+// call starts what it needs — because that rule is invisible in a tools/list,
+// and an agent that does not know it will avoid a tool whose service is STOPPED
+// (or improvise a headless instance, which is worse). It is a named const so a
+// test can pin the two load-bearing phrases.
+const systemInstructions = "Manager of this machine's programs. " +
+	"A tool call starts what it needs: if a service is STOPPED, use the tool anyway — " +
+	"the manager starts the service for you; \"down\" does not mean \"unavailable\". " +
+	"You do not need to start anything yourself; use service_start only if a tool call " +
+	"actually fails. Exception: Blender is not auto-started (it opens a window) — " +
+	"open the real Blender yourself, never a headless instance. " +
+	"services_list says what is running and why; service_stop stops a program."
+
 func newMCPServer(e *Engine) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "system",
 		Version: "1.0.0",
 	}, &mcp.ServerOptions{
-		Instructions: "Manager of this machine's programs. " +
-			"services_list says what is running and WHY each program exists; " +
-			"service_start starts it and waits for it to answer. " +
-			"Some MCP servers (Blender, ComfyUI) exist ONLY if their application is running: " +
-			"start it first, the tools will appear afterwards.",
+		Instructions: systemInstructions,
 	})
 
 	// --- services_list -----------------------------------------------------
@@ -73,7 +83,8 @@ func newMCPServer(e *Engine) *mcp.Server {
 		Name: "servers_list",
 		Description: "Lists the MCP servers declared in the inventory: transport, reason for being, " +
 			"pitfalls, the service they depend on, and the clients that receive them. " +
-			"Useful when a server is unreachable: it says whether it exists and what it is missing.",
+			"Useful when a server is unreachable: it says whether it exists and what it is missing. " +
+			"A STOPPED prerequisite does not mean unavailable — calling the server's tools starts it.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		inv, err := LoadInventory(InventoryPath())
 		if err != nil {
@@ -105,7 +116,7 @@ func newMCPServer(e *Engine) *mcp.Server {
 					if running, detail := e.Probe(svc); running {
 						state = "running — " + detail
 					} else {
-						state = "STOPPED — " + detail
+						state = "STOPPED — " + detail + " (starts automatically when you call its tools)"
 					}
 				}
 				fmt.Fprintf(&b, "    requires service %q : %s\n", sv.NeedsService, state)
